@@ -233,6 +233,65 @@ function rotateCanvas(canvas, degrees) {
   return out;
 }
 
+// Shape facts about the cleaned-up glyph, for the letters Tesseract is
+// weakest at when they stand alone: a lone "I" is dropped as a line
+// artifact, and a bold "O" often reads as C. Both are trivially separable
+// geometrically on our clean binary canvas.
+function analyzeGlyph(canvas) {
+  const size = canvas.width;
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, size, size).data;
+  const black = new Uint8Array(size * size);
+  let minX = size;
+  let maxX = 0;
+  let minY = size;
+  let maxY = 0;
+  let count = 0;
+  for (let p = 0; p < size * size; p++) {
+    if (d[p * 4] < 128) {
+      black[p] = 1;
+      count++;
+      const x = p % size;
+      const y = (p / size) | 0;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (count === 0) return null;
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+
+  // Flood the outside white; any white left unreached is an enclosed hole.
+  const seen = new Uint8Array(size * size);
+  const stack = [];
+  for (let i = 0; i < size; i++) {
+    for (const p of [i, (size - 1) * size + i, i * size, i * size + size - 1]) {
+      if (!black[p] && !seen[p]) { seen[p] = 1; stack.push(p); }
+    }
+  }
+  while (stack.length) {
+    const p = stack.pop();
+    const x = p % size;
+    const neighbors = [p - size, p + size];
+    if (x > 0) neighbors.push(p - 1);
+    if (x < size - 1) neighbors.push(p + 1);
+    for (const n of neighbors) {
+      if (n >= 0 && n < size * size && !black[n] && !seen[n]) {
+        seen[n] = 1;
+        stack.push(n);
+      }
+    }
+  }
+  let holePixels = 0;
+  for (let p = 0; p < size * size; p++) if (!black[p] && !seen[p]) holePixels++;
+
+  return {
+    hasHole: holePixels > size * size * 0.005,
+    barLike: bh / bw >= 2.8 && count / (bw * bh) >= 0.8,
+  };
+}
+
 async function recognizeAttempt(worker, canvas, psm) {
   await worker.setParameters({ tessedit_pageseg_mode: psm });
   const { data } = await worker.recognize(canvas);
@@ -331,11 +390,81 @@ function autoCropBoard(canvas) {
   return out;
 }
 
+// Segment one axis of the board directly: contiguous runs of ink are the
+// letter blocks (one per tile), and the quiet valleys between them are
+// where the cell boundaries belong. Unlike uniform division this survives
+// trailing whitespace, off-center boards and slightly uneven grids, and it
+// returns the exact cut positions.
+function segmentAxis(profile, length) {
+  const win = Math.max(2, Math.round(length * 0.01));
+  const smooth = new Float64Array(length);
+  for (let i = 0; i < length; i++) {
+    let s = 0;
+    let n = 0;
+    for (let j = i - win; j <= i + win; j++) {
+      if (j >= 0 && j < length) { s += profile[j]; n++; }
+    }
+    smooth[i] = s / n;
+  }
+  let max = 0;
+  for (let i = 0; i < length; i++) if (smooth[i] > max) max = smooth[i];
+  if (max === 0) return null;
+  const cut = max * 0.15;
+
+  const blocks = [];
+  let start = null;
+  for (let i = 0; i <= length; i++) {
+    const on = i < length && smooth[i] >= cut;
+    if (on && start === null) start = i;
+    if (!on && start !== null) {
+      blocks.push([start, i - 1]);
+      start = null;
+    }
+  }
+  // Merge blocks split by hairline dips and drop specks.
+  const merged = [];
+  for (const b of blocks) {
+    const prev = merged[merged.length - 1];
+    if (prev && b[0] - prev[1] < length * 0.012) prev[1] = b[1];
+    else merged.push([...b]);
+  }
+  const solid = merged.filter(([lo, hi]) => hi - lo >= length * 0.02);
+  const count = solid.length;
+  if (count < 3 || count > 10) return null;
+
+  // Cell boundaries: midpoints of the gaps, extended a little past the
+  // outer blocks so tile faces aren't clipped.
+  const pad = Math.round((solid[count - 1][1] - solid[0][0]) / count * 0.35);
+  const cuts = [Math.max(0, solid[0][0] - pad)];
+  for (let i = 1; i < count; i++) {
+    cuts.push(Math.round((solid[i - 1][1] + solid[i][0]) / 2));
+  }
+  cuts.push(Math.min(length - 1, solid[count - 1][1] + pad));
+
+  // Real tiles are evenly spaced. Irregular spacing means the "blocks"
+  // include junk (die edges, glare) — reject rather than mis-split.
+  const spans = [];
+  for (let i = 1; i < cuts.length; i++) spans.push(cuts[i] - cuts[i - 1]);
+  const meanSpan = spans.reduce((a, b) => a + b, 0) / spans.length;
+  if (spans.some((s) => Math.abs(s - meanSpan) / meanSpan > 0.3)) return null;
+
+  return { count, cuts };
+}
+
 function estimateFromCanvas(canvas) {
   const { colInk, rowInk } = inkProfiles(canvas);
+
+  // Prefer direct segmentation — it also yields the exact cut positions.
+  const colSeg = segmentAxis(colInk, canvas.width);
+  const rowSeg = segmentAxis(rowInk, canvas.height);
+  if (colSeg && rowSeg) {
+    return { rows: rowSeg.count, cols: colSeg.count, cuts: { x: colSeg.cuts, y: rowSeg.cuts } };
+  }
+
+  // Fallback: uniform division scoring.
   const cols = bestDivisions(colInk, canvas.width);
   const rows = bestDivisions(rowInk, canvas.height);
-  return rows && cols ? { rows, cols } : null;
+  return rows && cols ? { rows, cols, cuts: null } : null;
 }
 
 /**
@@ -376,7 +505,7 @@ function bestDivisions(profile, length) {
   const mean = total / length;
   if (mean === 0) return null;
 
-  let best = null;
+  const devs = new Map();
   let bestDev = 0;
   for (let k = 3; k <= 10; k++) {
     const band = Math.max(2, Math.round(length * 0.012));
@@ -392,12 +521,18 @@ function bestDivisions(profile, length) {
       }
     }
     const dev = Math.abs(sum / cnt / mean - 1);
-    if (dev > bestDev) {
-      bestDev = dev;
-      best = k;
-    }
+    devs.set(k, dev);
+    if (dev > bestDev) bestDev = dev;
   }
-  return bestDev > 0.45 ? best : null;
+  if (bestDev <= 0.45) return null;
+  // Divisors of the true count score just as well (splitting an 8-wide
+  // board in 4 also puts every boundary in a gap), so among the candidates
+  // near the best score, trust the finest split.
+  let best = null;
+  for (let k = 3; k <= 10; k++) {
+    if (devs.get(k) >= Math.max(0.45, 0.85 * bestDev)) best = k;
+  }
+  return best;
 }
 
 /**
@@ -406,16 +541,22 @@ function bestDivisions(profile, length) {
  * @param {number} rows
  * @param {number} cols
  * @param {(status: string, progress: number) => void} onProgress
+ * @param {{x: number[], y: number[]} | null} cuts - exact cell boundaries
+ *   from segmentation; falls back to uniform division without them
  * @returns {Promise<{board: string[][], review: boolean[][]}>}
  *   board: uppercase cell strings; review: cells the user should double-check
  */
-async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress) {
+async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = null) {
   if (typeof Tesseract === 'undefined') {
     throw new Error('OCR engine failed to load.');
   }
 
   const cellW = canvas.width / cols;
   const cellH = canvas.height / rows;
+  const useCuts = cuts && cuts.x.length === cols + 1 && cuts.y.length === rows + 1;
+  const cellRect = (r, c) => (useCuts
+    ? [cuts.x[c], cuts.y[r], cuts.x[c + 1] - cuts.x[c], cuts.y[r + 1] - cuts.y[r]]
+    : [c * cellW, r * cellH, cellW, cellH]);
 
   // The whole engine is served with the app (vendor/), so OCR works without
   // any third-party CDN. Paths are absolutized so it also works when the app
@@ -454,7 +595,8 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress) {
         // for one letter); PSM 8 = single word; PSM 7 = one text line (both
         // catch letters PSM 10 rejects, and the two-letter "Qu" die). A
         // looser crop rescues letters that the tight inset clipped.
-        const tight = preprocessCell(canvas, c * cellW, r * cellH, cellW, cellH, 0.12);
+        const [cx, cy, cw, ch] = cellRect(r, c);
+        const tight = preprocessCell(canvas, cx, cy, cw, ch, 0.12);
         const tightCv = tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas;
         for (const psm of ['10', '8', '7']) {
           const res = await recognizeAttempt(worker, tightCv, psm);
@@ -462,7 +604,7 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress) {
           if (best.confidence >= GOOD_ENOUGH) break;
         }
         if (best.confidence < GOOD_ENOUGH) {
-          const loose = preprocessCell(canvas, c * cellW, r * cellH, cellW, cellH, 0.04);
+          const loose = preprocessCell(canvas, cx, cy, cw, ch, 0.04);
           const looseHint = loose.hint ?? tight.hint;
           const looseCv = looseHint ? rotateCanvas(loose.canvas, looseHint) : loose.canvas;
           for (const psm of ['10', '8']) {
@@ -497,6 +639,18 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress) {
               if (res.confidence > best.confidence) best = res;
               if (best.confidence >= GOOD_ENOUGH) break outer;
             }
+          }
+        }
+
+        // Geometric rescue for Tesseract's isolated-glyph blind spots.
+        const shape = analyzeGlyph(tight.canvas);
+        if (shape) {
+          if (!best.text && shape.barLike) {
+            best = { text: 'I', confidence: 75 };
+          } else if (best.text === 'C' && shape.hasHole) {
+            best = { text: 'O', confidence: Math.max(best.confidence, 75) };
+          } else if (!best.text && shape.hasHole) {
+            best = { text: 'O', confidence: NEEDS_REVIEW - 5 }; // guess, flagged
           }
         }
 

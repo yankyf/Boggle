@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Boggle Solver</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><polygon points='50,4 94,26 50,48 6,26' fill='%23b7a3f7'/><polygon points='94,26 94,74 50,96 50,48' fill='%237c3aed'/><polygon points='6,26 50,48 50,96 6,74' fill='%234c1d95'/><polygon points='50,4 94,26 50,48 6,26' fill='none' stroke='white' stroke-opacity='0.4' stroke-width='1.5'/><text x='50' y='36' font-size='24' font-weight='bold' text-anchor='middle' fill='%233b1580' font-family='Arial, sans-serif'>A</text><text x='27' y='74' font-size='27' font-weight='bold' text-anchor='middle' fill='white' font-family='Arial, sans-serif'>B</text><text x='73' y='74' font-size='27' font-weight='bold' text-anchor='middle' fill='white' font-family='Arial, sans-serif'>C</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><g fill='%23efe9d8' stroke='%23efe9d8' stroke-width='8' stroke-linejoin='round'><polygon points='50,7 91,27.5 50,48 9,27.5'/><polygon points='9,27.5 50,48 50,91 9,70.5'/><polygon points='50,48 91,27.5 91,70.5 50,91'/></g><polygon points='50,10.3 85.5,28 50,45.7 14.5,28' fill='%23faf6ea' stroke='%23faf6ea' stroke-width='4' stroke-linejoin='round'/><polygon points='12.6,32.3 47.4,49.7 47.4,86.4 12.6,69' fill='%232f6fe4' stroke='%232f6fe4' stroke-width='4' stroke-linejoin='round'/><polygon points='52.6,49.7 87.4,32.3 87.4,69 52.6,86.4' fill='%23d93a3f' stroke='%23d93a3f' stroke-width='4' stroke-linejoin='round'/><text x='50' y='36.5' font-size='25' font-weight='bold' text-anchor='middle' fill='%231e2a5a' font-family='Arial, sans-serif'>A</text><text x='30' y='76' font-size='27' font-weight='bold' text-anchor='middle' fill='%23fdfbf3' font-family='Arial, sans-serif'>B</text><text x='70' y='76' font-size='27' font-weight='bold' text-anchor='middle' fill='%23fdfbf3' font-family='Arial, sans-serif'>C</text></svg>" />
   <meta name="theme-color" content="#4f46e5" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -14,13 +14,17 @@
       <div class="appbar__inner">
         <span class="logo-die" aria-hidden="true">
           <svg width="38" height="38" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-            <polygon points="50,4 94,26 50,48 6,26" fill="#b7a3f7" />
-            <polygon points="94,26 94,74 50,96 50,48" fill="#7c3aed" />
-            <polygon points="6,26 50,48 50,96 6,74" fill="#4c1d95" />
-            <polygon points="50,4 94,26 50,48 6,26" fill="none" stroke="white" stroke-opacity="0.4" stroke-width="1.5" />
-            <text x="50" y="36" font-size="24" font-weight="bold" text-anchor="middle" fill="#3b1580" font-family="Arial, sans-serif">A</text>
-            <text x="27" y="74" font-size="27" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">B</text>
-            <text x="73" y="74" font-size="27" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">C</text>
+            <g fill="#efe9d8" stroke="#efe9d8" stroke-width="8" stroke-linejoin="round">
+              <polygon points="50,7 91,27.5 50,48 9,27.5" />
+              <polygon points="9,27.5 50,48 50,91 9,70.5" />
+              <polygon points="50,48 91,27.5 91,70.5 50,91" />
+            </g>
+            <polygon points="50,10.3 85.5,28 50,45.7 14.5,28" fill="#faf6ea" stroke="#faf6ea" stroke-width="4" stroke-linejoin="round" />
+            <polygon points="12.6,32.3 47.4,49.7 47.4,86.4 12.6,69" fill="#2f6fe4" stroke="#2f6fe4" stroke-width="4" stroke-linejoin="round" />
+            <polygon points="52.6,49.7 87.4,32.3 87.4,69 52.6,86.4" fill="#d93a3f" stroke="#d93a3f" stroke-width="4" stroke-linejoin="round" />
+            <text x="50" y="36.5" font-size="25" font-weight="bold" text-anchor="middle" fill="#1e2a5a" font-family="Arial, sans-serif">A</text>
+            <text x="30" y="76" font-size="27" font-weight="bold" text-anchor="middle" fill="#fdfbf3" font-family="Arial, sans-serif">B</text>
+            <text x="70" y="76" font-size="27" font-weight="bold" text-anchor="middle" fill="#fdfbf3" font-family="Arial, sans-serif">C</text>
           </svg>
         </span>
         <div class="appbar__titles">
@@ -55,13 +59,17 @@
           <button id="random-btn" class="btn btn--tonal">
             <span class="btn__icon btn__icon--svg" aria-hidden="true">
               <svg width="22" height="22" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-                <polygon points="50,4 94,26 50,48 6,26" fill="#b7a3f7" />
-                <polygon points="94,26 94,74 50,96 50,48" fill="#7c3aed" />
-                <polygon points="6,26 50,48 50,96 6,74" fill="#4c1d95" />
-                <polygon points="50,4 94,26 50,48 6,26" fill="none" stroke="white" stroke-opacity="0.4" stroke-width="1.5" />
-                <text x="50" y="36" font-size="24" font-weight="bold" text-anchor="middle" fill="#3b1580" font-family="Arial, sans-serif">A</text>
-                <text x="27" y="74" font-size="27" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">B</text>
-                <text x="73" y="74" font-size="27" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">C</text>
+                <g fill="#efe9d8" stroke="#efe9d8" stroke-width="8" stroke-linejoin="round">
+                  <polygon points="50,7 91,27.5 50,48 9,27.5" />
+                  <polygon points="9,27.5 50,48 50,91 9,70.5" />
+                  <polygon points="50,48 91,27.5 91,70.5 50,91" />
+                </g>
+                <polygon points="50,10.3 85.5,28 50,45.7 14.5,28" fill="#faf6ea" stroke="#faf6ea" stroke-width="4" stroke-linejoin="round" />
+                <polygon points="12.6,32.3 47.4,49.7 47.4,86.4 12.6,69" fill="#2f6fe4" stroke="#2f6fe4" stroke-width="4" stroke-linejoin="round" />
+                <polygon points="52.6,49.7 87.4,32.3 87.4,69 52.6,86.4" fill="#d93a3f" stroke="#d93a3f" stroke-width="4" stroke-linejoin="round" />
+                <text x="50" y="36.5" font-size="25" font-weight="bold" text-anchor="middle" fill="#1e2a5a" font-family="Arial, sans-serif">A</text>
+                <text x="30" y="76" font-size="27" font-weight="bold" text-anchor="middle" fill="#fdfbf3" font-family="Arial, sans-serif">B</text>
+                <text x="70" y="76" font-size="27" font-weight="bold" text-anchor="middle" fill="#fdfbf3" font-family="Arial, sans-serif">C</text>
               </svg>
             </span> Shuffle letters
           </button>

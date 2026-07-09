@@ -333,7 +333,7 @@
       }
       const { board, review } = await recognizeBoardFromCanvas(prep.canvas, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
-      });
+      }, prep.size ? prep.size.cuts : null);
       const limit = maxCellLetters();
       state.board = board.map((row) => row.map((cell) => {
         const v = cell === 'Q' && limit === 2 ? 'QU' : cell;
