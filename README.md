@@ -26,6 +26,8 @@ Then open http://localhost:8000.
 - **Rows / Cols**: set the board size (3–8 per side), then "Apply size".
 - **Random board**: fills the grid using real physical Boggle dice sets
   for 4x4 and 5x5 (Big Boggle); other sizes use weighted-random letters.
+- **Long-word board**: rolls dozens of random boards behind the scenes,
+  solves each one, and keeps the board richest in 6+ letter words.
 - **Upload board photo**: crop your photo tightly to just the board first
   (no background), set rows/cols to match, then upload. Each cell is OCR'd
   individually — review the highlighted (red) or misread cells before

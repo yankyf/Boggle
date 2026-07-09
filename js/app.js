@@ -16,6 +16,7 @@
     colsInput: document.getElementById('cols-input'),
     resizeBtn: document.getElementById('resize-btn'),
     randomBtn: document.getElementById('random-btn'),
+    richBtn: document.getElementById('rich-btn'),
     clearBtn: document.getElementById('clear-btn'),
     imageInput: document.getElementById('image-input'),
     ocrStatus: document.getElementById('ocr-status'),
@@ -157,6 +158,7 @@
       });
       setDictStatus('Dictionary ready');
       el.solveBtn.disabled = false;
+      el.richBtn.disabled = false;
       setTimeout(() => setDictStatus(''), 2500);
     } catch (err) {
       setDictStatus('Failed to load dictionary — check your connection and reload.');
@@ -291,8 +293,45 @@
     }
   }
 
+  // Roll many random boards, solve each, and keep the one richest in long
+  // words. Long words are weighted quadratically so one 8-letter word beats
+  // a pile of extra 4-letter ones.
+  async function generateLongWordBoard() {
+    const cells = state.rows * state.cols;
+    const candidates = cells <= 25 ? 60 : cells <= 36 ? 25 : 10;
+    el.richBtn.disabled = true;
+    let best = null;
+    let bestScore = -1;
+    let bestLongest = 0;
+    for (let i = 0; i < candidates; i++) {
+      const board = generateRandomBoard(state.rows, state.cols);
+      const lower = board.map((row) => row.map((cell) => cell.toLowerCase()));
+      const words = solveBoggle(lower, state.trie, 6);
+      let score = 0;
+      let longest = 0;
+      for (const word of words.keys()) {
+        score += word.length * word.length;
+        longest = Math.max(longest, word.length);
+      }
+      score += longest * 200;
+      if (score > bestScore) {
+        bestScore = score;
+        best = board;
+        bestLongest = longest;
+      }
+      // yield to the browser occasionally so the UI doesn't freeze
+      if (i % 10 === 9) await new Promise((r) => setTimeout(r, 0));
+    }
+    el.richBtn.disabled = false;
+    fillBoard(best);
+    setOcrStatus(bestLongest >= 6
+      ? `Board picked from ${candidates} rolls — its longest word has ${bestLongest} letters.`
+      : `Board picked from ${candidates} rolls.`);
+  }
+
   el.resizeBtn.addEventListener('click', applyResize);
   el.randomBtn.addEventListener('click', () => fillBoard(generateRandomBoard(state.rows, state.cols)));
+  el.richBtn.addEventListener('click', generateLongWordBoard);
   el.clearBtn.addEventListener('click', () => fillBoard(emptyBoard(state.rows, state.cols)));
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
