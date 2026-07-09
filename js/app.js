@@ -324,14 +324,14 @@
     setOcrStatus('Reading image…');
     try {
       // Size the board to match the photo when the grid is clear enough.
-      const detected = await estimateBoardSize(file);
-      if (detected && (detected.rows !== state.rows || detected.cols !== state.cols)) {
-        el.rowsInput.value = detected.rows;
-        el.colsInput.value = detected.cols;
+      const prep = await prepareBoardImage(file);
+      if (prep.size && (prep.size.rows !== state.rows || prep.size.cols !== state.cols)) {
+        el.rowsInput.value = prep.size.rows;
+        el.colsInput.value = prep.size.cols;
         applyResize();
-        setOcrStatus(`Looks like a ${detected.rows}×${detected.cols} board — reading letters…`);
+        setOcrStatus(`Looks like a ${prep.size.rows}×${prep.size.cols} board — reading letters…`);
       }
-      const { board, review } = await recognizeBoardFromImage(file, state.rows, state.cols, (status, progress) => {
+      const { board, review } = await recognizeBoardFromCanvas(prep.canvas, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
       });
       const limit = maxCellLetters();

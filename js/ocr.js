@@ -260,6 +260,110 @@ function drawDownscaled(img) {
   return canvas;
 }
 
+function inkProfiles(canvas) {
+  const { width: W, height: H } = canvas;
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+  const gray = new Uint8ClampedArray(W * H);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  const threshold = otsuThreshold(gray);
+  let dark = 0;
+  for (let p = 0; p < gray.length; p++) if (gray[p] < threshold) dark++;
+  const invert = dark > gray.length / 2;
+
+  const colInk = new Float64Array(W);
+  const rowInk = new Float64Array(H);
+  for (let p = 0; p < gray.length; p++) {
+    if ((gray[p] < threshold) !== invert) {
+      colInk[p % W]++;
+      rowInk[(p / W) | 0]++;
+    }
+  }
+  return { colInk, rowInk };
+}
+
+// People rarely crop their photo exactly to the grid. The letters are where
+// the ink is, so trim away the quiet margins (background, table, page
+// chrome) before splitting the image into cells — a misaligned grid ruins
+// every cell at once.
+function autoCropBoard(canvas) {
+  const { width: W, height: H } = canvas;
+  const { colInk, rowInk } = inkProfiles(canvas);
+
+  function activeSpan(profile, length) {
+    // Smooth so a stray speck doesn't extend the span.
+    const win = Math.max(2, Math.round(length * 0.01));
+    const smooth = new Float64Array(length);
+    for (let i = 0; i < length; i++) {
+      let s = 0;
+      let n = 0;
+      for (let j = i - win; j <= i + win; j++) {
+        if (j >= 0 && j < length) { s += profile[j]; n++; }
+      }
+      smooth[i] = s / n;
+    }
+    let max = 0;
+    for (let i = 0; i < length; i++) if (smooth[i] > max) max = smooth[i];
+    if (max === 0) return null;
+    const cut = max * 0.12;
+    let lo = 0;
+    let hi = length - 1;
+    while (lo < length && smooth[lo] < cut) lo++;
+    while (hi > lo && smooth[hi] < cut) hi--;
+    if (hi - lo < length * 0.25) return null; // too small to be the board
+    const margin = Math.round((hi - lo) * 0.02);
+    return [Math.max(0, lo - margin), Math.min(length - 1, hi + margin)];
+  }
+
+  const xs = activeSpan(colInk, W);
+  const ys = activeSpan(rowInk, H);
+  if (!xs || !ys) return canvas;
+  const [x0, x1] = xs;
+  const [y0, y1] = ys;
+  // Nearly the whole image already? Skip the copy.
+  if (x0 < W * 0.03 && x1 > W * 0.97 && y0 < H * 0.03 && y1 > H * 0.97) return canvas;
+
+  const out = document.createElement('canvas');
+  out.width = x1 - x0 + 1;
+  out.height = y1 - y0 + 1;
+  out.getContext('2d').drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  return out;
+}
+
+function estimateFromCanvas(canvas) {
+  const { colInk, rowInk } = inkProfiles(canvas);
+  const cols = bestDivisions(colInk, canvas.width);
+  const rows = bestDivisions(rowInk, canvas.height);
+  return rows && cols ? { rows, cols } : null;
+}
+
+/**
+ * Load the photo and decide which framing to read it with. A tightly
+ * cropped image usually shows a confident grid as-is; an uncropped photo
+ * shows one only after the quiet margins are trimmed. The size estimate
+ * and the canvas must come from the same framing, or the cell-splitting
+ * misaligns with the tiles.
+ *
+ * @param {File} file
+ * @returns {Promise<{canvas: HTMLCanvasElement, size: {rows: number, cols: number} | null}>}
+ */
+async function prepareBoardImage(file) {
+  const img = await loadImageFromFile(file);
+  const original = drawDownscaled(img);
+  URL.revokeObjectURL(img.src);
+
+  let size = estimateFromCanvas(original);
+  if (size) return { canvas: original, size };
+
+  const cropped = autoCropBoard(original);
+  if (cropped !== original) {
+    size = estimateFromCanvas(cropped);
+    if (size) return { canvas: cropped, size };
+  }
+  return { canvas: cropped, size: null };
+}
+
 // Guess how many rows/cols the photographed board has. Along the boundary
 // lines of a k×k split, a real board shows something unusual: almost no ink
 // for tile-style boards (background gaps) or lots of ink for boards with
@@ -297,57 +401,18 @@ function bestDivisions(profile, length) {
 }
 
 /**
- * @param {File} file
- * @returns {Promise<{rows: number, cols: number} | null>} null when the
- *   image doesn't show a confident grid structure.
- */
-async function estimateBoardSize(file) {
-  const img = await loadImageFromFile(file);
-  const canvas = drawDownscaled(img);
-  URL.revokeObjectURL(img.src);
-  const { width: W, height: H } = canvas;
-  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
-
-  const gray = new Uint8ClampedArray(W * H);
-  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  }
-  const threshold = otsuThreshold(gray);
-  let dark = 0;
-  for (let p = 0; p < gray.length; p++) if (gray[p] < threshold) dark++;
-  const invert = dark > gray.length / 2;
-
-  const colInk = new Float64Array(W);
-  const rowInk = new Float64Array(H);
-  for (let p = 0; p < gray.length; p++) {
-    const isInk = (gray[p] < threshold) !== invert;
-    if (isInk) {
-      colInk[p % W]++;
-      rowInk[(p / W) | 0]++;
-    }
-  }
-
-  const cols = bestDivisions(colInk, W);
-  const rows = bestDivisions(rowInk, H);
-  return rows && cols ? { rows, cols } : null;
-}
-
-/**
- * @param {File} file
+ * @param {HTMLCanvasElement} canvas - from prepareBoardImage, so the crop
+ *   matches the framing the size estimate was made on
  * @param {number} rows
  * @param {number} cols
  * @param {(status: string, progress: number) => void} onProgress
  * @returns {Promise<{board: string[][], review: boolean[][]}>}
  *   board: uppercase cell strings; review: cells the user should double-check
  */
-async function recognizeBoardFromImage(file, rows, cols, onProgress) {
+async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress) {
   if (typeof Tesseract === 'undefined') {
     throw new Error('OCR engine failed to load.');
   }
-
-  const img = await loadImageFromFile(file);
-  const canvas = drawDownscaled(img);
-  URL.revokeObjectURL(img.src);
 
   const cellW = canvas.width / cols;
   const cellH = canvas.height / rows;
