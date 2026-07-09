@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Boggle Solver</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="page__header">
+      <h1>Boggle Solver</h1>
+      <p class="page__subtitle">Type in a board, or upload a photo of one, and find every word.</p>
+    </header>
+
+    <main class="layout">
+      <section class="card">
+        <div class="card__row controls">
+          <label class="field">
+            Rows
+            <input type="number" id="rows-input" min="3" max="8" value="4" />
+          </label>
+          <label class="field">
+            Cols
+            <input type="number" id="cols-input" min="3" max="8" value="4" />
+          </label>
+          <button id="resize-btn" class="btn btn--ghost">Apply size</button>
+          <button id="random-btn" class="btn btn--ghost">🎲 Random board</button>
+          <button id="clear-btn" class="btn btn--ghost">Clear</button>
+        </div>
+
+        <div class="card__row upload-row">
+          <label class="btn btn--ghost file-btn">
+            📷 Upload board photo
+            <input type="file" id="image-input" accept="image/*" hidden />
+          </label>
+          <span id="ocr-status" class="ocr-status"></span>
+        </div>
+
+        <div id="board-grid" class="board-grid"></div>
+
+        <div class="card__row solve-row">
+          <label class="field">
+            Min length
+            <select id="min-length-input">
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <button id="solve-btn" class="btn btn--primary" disabled>Find words</button>
+          <span id="dict-status" class="dict-status">Loading dictionary…</span>
+        </div>
+      </section>
+
+      <section class="card results-card">
+        <div class="results-header">
+          <h2>Words found</h2>
+          <div id="results-summary" class="results-summary"></div>
+        </div>
+        <div id="results-list" class="results-list"></div>
+      </section>
+    </main>
+
+    <footer class="page__footer">
+      Word list: <a href="https://github.com/sindresorhus/word-list" target="_blank" rel="noopener">sindresorhus/word-list</a> (MIT).
+      OCR: <a href="https://github.com/naptha/tesseract.js" target="_blank" rel="noopener">Tesseract.js</a>. Everything runs in your browser — nothing is uploaded anywhere.
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="js/trie.js"></script>
+  <script src="js/dice.js"></script>
+  <script src="js/solver.js"></script>
+  <script src="js/ocr.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
