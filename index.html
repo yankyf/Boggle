@@ -27,7 +27,7 @@
         </span>
         <div class="appbar__titles">
           <h1>Boggle Solver</h1>
-          <p>Every word on the board, instantly — type it in or snap a photo.</p>
+          <p>Every word on the board, instantly — type it in or upload a photo.</p>
         </div>
       </div>
     </header>
@@ -47,11 +47,27 @@
             <input type="number" id="cols-input" min="3" max="10" value="4" />
           </label>
           <span class="size-hint">3–10</span>
+          <label class="toggle" title="Real Boggle has a “Qu” die — turn this off to force one letter per box">
+            <input type="checkbox" id="two-letter-toggle" checked />
+            Allow “Qu” (2-letter) boxes
+          </label>
         </div>
 
         <div class="toolbar">
           <button id="random-btn" class="btn btn--tonal">
-            <span class="btn__icon">🎲</span> Shuffle letters
+            <span class="btn__icon btn__icon--svg" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="die-grad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#4f46e5" />
+                    <stop offset="1" stop-color="#9333ea" />
+                  </linearGradient>
+                </defs>
+                <rect x="4" y="4" width="92" height="92" rx="22" fill="url(#die-grad)" />
+                <rect x="10" y="10" width="80" height="80" rx="16" fill="white" fill-opacity="0.12" />
+                <text x="50" y="72" font-size="62" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">A</text>
+              </svg>
+            </span> Shuffle letters
           </button>
           <button id="rich-btn" class="btn btn--tonal" disabled title="Rolls many boards and keeps the one hiding the most long words">
             <span class="btn__icon">🏆</span> Long-word board
@@ -104,7 +120,7 @@
     </footer>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="vendor/tesseract/tesseract.min.js"></script>
   <script src="js/trie.js"></script>
   <script src="js/dice.js"></script>
   <script src="js/solver.js"></script>

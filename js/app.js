@@ -26,7 +26,12 @@
     resultsSummary: document.getElementById('results-summary'),
     resultsList: document.getElementById('results-list'),
     wordSearch: document.getElementById('word-search'),
+    twoLetterToggle: document.getElementById('two-letter-toggle'),
   };
+
+  function maxCellLetters() {
+    return el.twoLetterToggle.checked ? 2 : 1;
+  }
 
   function emptyBoard(rows, cols) {
     return Array.from({ length: rows }, () => new Array(cols).fill(''));
@@ -67,7 +72,7 @@
         input.type = 'text';
         input.id = `cell-${r}-${c}`;
         input.className = 'board-cell';
-        input.maxLength = 2;
+        input.maxLength = maxCellLetters();
         input.autocomplete = 'off';
         input.spellcheck = false;
         input.value = state.board[r][c] || '';
@@ -93,13 +98,16 @@
     const input = e.target;
     const r = Number(input.dataset.r);
     const c = Number(input.dataset.c);
-    const cleaned = input.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, 2);
+    const cleaned = input.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, maxCellLetters());
     input.value = cleaned;
     state.board[r][c] = cleaned;
     input.classList.remove('needs-review');
     clearResults();
 
-    if (cleaned.length >= 1) {
+    // Jump to the next box once this one has a letter — except after a lone
+    // "Q" in two-letter mode, where a "u" is probably coming next.
+    const waitForU = maxCellLetters() === 2 && cleaned === 'Q';
+    if (cleaned.length >= 1 && !waitForU) {
       focusCell(r, c + 1, r + 1, 0);
     }
   }
@@ -152,7 +160,8 @@
   }
 
   function fillBoard(letters) {
-    state.board = letters.map((row) => row.map((cell) => (cell || '').toUpperCase()));
+    const limit = maxCellLetters();
+    state.board = letters.map((row) => row.map((cell) => (cell || '').toUpperCase().slice(0, limit)));
     renderGrid();
     clearResults();
   }
@@ -305,14 +314,22 @@
 
     setOcrStatus('Reading image…');
     try {
-      const board = await recognizeBoardFromImage(file, state.rows, state.cols, (status, progress) => {
+      const { board, review } = await recognizeBoardFromImage(file, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
       });
-      state.board = board.map((row) => row.map((cell) => (cell === 'Q' ? 'QU' : cell)));
+      const limit = maxCellLetters();
+      state.board = board.map((row) => row.map((cell) => {
+        const v = cell === 'Q' && limit === 2 ? 'QU' : cell;
+        return v.slice(0, limit);
+      }));
       renderGrid();
       clearResults();
-      findEmptyCells().forEach(([r, c]) => cellInput(r, c)?.classList.add('needs-review'));
-      setOcrStatus('Detected! Please review the letters (red = needs a fix) before solving.');
+      for (let r = 0; r < state.rows; r++) {
+        for (let c = 0; c < state.cols; c++) {
+          if (review[r][c] || !state.board[r][c]) cellInput(r, c)?.classList.add('needs-review');
+        }
+      }
+      setOcrStatus('Detected! Please review the letters (red = uncertain) before solving.');
     } catch (err) {
       console.error(err);
       setOcrStatus('Could not read that image. Try a clearer, tightly-cropped photo of the board.');
@@ -364,6 +381,13 @@
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
   el.imageInput.addEventListener('change', handleImageUpload);
+  el.twoLetterToggle.addEventListener('change', () => {
+    if (!el.twoLetterToggle.checked) {
+      state.board = state.board.map((row) => row.map((cell) => cell.slice(0, 1)));
+    }
+    renderGrid();
+    clearResults();
+  });
   el.wordSearch.addEventListener('input', () => {
     if (state.results) renderResults();
   });
