@@ -41,8 +41,18 @@
     return document.getElementById(`cell-${r}-${c}`);
   }
 
+  // Letters scale with the actual rendered cell size so any board size fits
+  // the card without overflowing.
+  function fitCellFont() {
+    const cell = el.boardGrid.querySelector('.board-cell');
+    if (cell && cell.clientWidth) {
+      el.boardGrid.style.setProperty('--cell-fs', `${Math.max(11, Math.round(cell.clientWidth * 0.42))}px`);
+    }
+  }
+
   function renderGrid() {
-    el.boardGrid.style.gridTemplateColumns = `repeat(${state.cols}, 56px)`;
+    el.boardGrid.style.setProperty('--cols', state.cols);
+    el.boardGrid.style.gridTemplateColumns = `repeat(${state.cols}, minmax(0, 1fr))`;
     el.boardGrid.innerHTML = '';
 
     for (let r = 0; r < state.rows; r++) {
@@ -73,6 +83,7 @@
         el.boardGrid.appendChild(wrapper);
       }
     }
+    requestAnimationFrame(fitCellFont);
   }
 
   function onCellInput(e) {
@@ -336,6 +347,7 @@
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
   el.imageInput.addEventListener('change', handleImageUpload);
+  window.addEventListener('resize', fitCellFont);
 
   state.board = emptyBoard(state.rows, state.cols);
   renderGrid();
