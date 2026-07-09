@@ -260,6 +260,78 @@ function drawDownscaled(img) {
   return canvas;
 }
 
+// Guess how many rows/cols the photographed board has. Along the boundary
+// lines of a k×k split, a real board shows something unusual: almost no ink
+// for tile-style boards (background gaps) or lots of ink for boards with
+// dark grid lines. So for every candidate count, measure the ink along its
+// implied boundaries and pick the count that deviates most from the image
+// average — if any candidate deviates clearly enough to trust.
+function bestDivisions(profile, length) {
+  let total = 0;
+  for (let i = 0; i < length; i++) total += profile[i];
+  const mean = total / length;
+  if (mean === 0) return null;
+
+  let best = null;
+  let bestDev = 0;
+  for (let k = 3; k <= 10; k++) {
+    const band = Math.max(2, Math.round(length * 0.012));
+    let sum = 0;
+    let cnt = 0;
+    for (let i = 1; i < k; i++) {
+      const center = Math.round((i * length) / k);
+      for (let x = center - band; x <= center + band; x++) {
+        if (x >= 0 && x < length) {
+          sum += profile[x];
+          cnt++;
+        }
+      }
+    }
+    const dev = Math.abs(sum / cnt / mean - 1);
+    if (dev > bestDev) {
+      bestDev = dev;
+      best = k;
+    }
+  }
+  return bestDev > 0.45 ? best : null;
+}
+
+/**
+ * @param {File} file
+ * @returns {Promise<{rows: number, cols: number} | null>} null when the
+ *   image doesn't show a confident grid structure.
+ */
+async function estimateBoardSize(file) {
+  const img = await loadImageFromFile(file);
+  const canvas = drawDownscaled(img);
+  URL.revokeObjectURL(img.src);
+  const { width: W, height: H } = canvas;
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+
+  const gray = new Uint8ClampedArray(W * H);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  const threshold = otsuThreshold(gray);
+  let dark = 0;
+  for (let p = 0; p < gray.length; p++) if (gray[p] < threshold) dark++;
+  const invert = dark > gray.length / 2;
+
+  const colInk = new Float64Array(W);
+  const rowInk = new Float64Array(H);
+  for (let p = 0; p < gray.length; p++) {
+    const isInk = (gray[p] < threshold) !== invert;
+    if (isInk) {
+      colInk[p % W]++;
+      rowInk[(p / W) | 0]++;
+    }
+  }
+
+  const cols = bestDivisions(colInk, W);
+  const rows = bestDivisions(rowInk, H);
+  return rows && cols ? { rows, cols } : null;
+}
+
 /**
  * @param {File} file
  * @param {number} rows
@@ -336,15 +408,28 @@ async function recognizeBoardFromImage(file, rows, cols, onProgress) {
         }
 
         // Stage 2 — physical dice land at random orientations, so try the
-        // three other rotations while confidence is still poor. Skipped
-        // when the underline anchor already fixed the orientation: a
-        // rotated M reads as a confident W, so guessing would be worse.
-        if (best.confidence < GOOD_ENOUGH && tight.hint === null) {
+        // three other rotations, but ONLY when the upright reading came up
+        // basically empty: an upright W reads as a MORE confident M when
+        // turned upside down, so rotating a readable glyph makes things
+        // worse, not better. Skipped when the underline anchor already
+        // fixed the orientation. Letters that are each other's rotations
+        // (M/W, A/V upside down; Z/N sideways) are mapped back to their
+        // upright interpretation and flagged, since without an underline
+        // the orientation is genuinely ambiguous.
+        if (best.confidence < 30 && tight.hint === null) {
+          const TWIN_180 = { M: 'W', W: 'M', A: 'V', V: 'A' };
+          const TWIN_90 = { Z: 'N', N: 'Z' };
           outer: for (const deg of [90, 180, 270]) {
             const rotated = rotateCanvas(tight.canvas, deg);
             for (const psm of ['10', '8']) {
               const res = await recognizeAttempt(worker, rotated, psm);
-              if (res.text && res.confidence > best.confidence) best = res;
+              if (!res.text) continue;
+              const twin = deg === 180 ? TWIN_180[res.text] : TWIN_90[res.text];
+              if (twin) {
+                res.text = twin;
+                res.confidence = Math.min(res.confidence, NEEDS_REVIEW - 5);
+              }
+              if (res.confidence > best.confidence) best = res;
               if (best.confidence >= GOOD_ENOUGH) break outer;
             }
           }

@@ -46,6 +46,27 @@ function weightedRandomLetter() {
   return entries[entries.length - 1][0];
 }
 
+// Common English digraphs, roughly ordered by frequency, for two-letter
+// mode where every box holds a pair of letters.
+const DIGRAPHS = [
+  'TH', 'HE', 'IN', 'ER', 'AN', 'RE', 'ON', 'AT', 'EN', 'ND',
+  'TI', 'ES', 'OR', 'TE', 'ED', 'IS', 'IT', 'AL', 'AR', 'ST',
+  'TO', 'NT', 'NG', 'SE', 'HA', 'AS', 'OU', 'IO', 'LE', 'VE',
+  'CO', 'ME', 'DE', 'HI', 'RI', 'RO', 'IC', 'NE', 'EA', 'RA',
+  'CE', 'LI', 'CH', 'LL', 'BE', 'MA', 'SI', 'OM', 'UR', 'CA',
+  'EL', 'TA', 'LA', 'NS', 'DI', 'FO', 'HO', 'PE', 'EC', 'PR',
+];
+
+function randomDigraph() {
+  // Bias toward the more common digraphs at the front of the list.
+  const i = Math.floor(Math.random() * DIGRAPHS.length * (0.4 + 0.6 * Math.random()));
+  return DIGRAPHS[Math.min(i, DIGRAPHS.length - 1)];
+}
+
+function generateRandomDigraphBoard(rows, cols) {
+  return Array.from({ length: rows }, () => Array.from({ length: cols }, randomDigraph));
+}
+
 function generateRandomBoard(rows, cols) {
   const count = rows * cols;
   let letters;

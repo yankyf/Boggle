@@ -202,6 +202,9 @@
     el.resultsList.innerHTML = '<div class="empty-state">No words yet — fill in the board and click "Find words".</div>';
     el.wordSearch.value = '';
     el.wordSearch.disabled = true;
+    // Any board change also outdates the last board-related status message
+    // (e.g. the long-word board announcement).
+    setOcrStatus('');
     clearHighlight();
   }
 
@@ -320,6 +323,14 @@
 
     setOcrStatus('Reading image…');
     try {
+      // Size the board to match the photo when the grid is clear enough.
+      const detected = await estimateBoardSize(file);
+      if (detected && (detected.rows !== state.rows || detected.cols !== state.cols)) {
+        el.rowsInput.value = detected.rows;
+        el.colsInput.value = detected.cols;
+        applyResize();
+        setOcrStatus(`Looks like a ${detected.rows}×${detected.cols} board — reading letters…`);
+      }
       const { board, review } = await recognizeBoardFromImage(file, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
       });
@@ -342,46 +353,69 @@
     }
   }
 
-  // Roll many random boards, solve each, and keep the one richest in long
-  // words. Long words are weighted quadratically so one 8-letter word beats
-  // a pile of extra 4-letter ones.
+  function randomBoardForMode() {
+    return maxCellLetters() === 2
+      ? generateRandomDigraphBoard(state.rows, state.cols)
+      : generateRandomBoard(state.rows, state.cols);
+  }
+
+  // Hunt for a board with the longest possible words: start from the best
+  // of a batch of random boards, then hill-climb — mutate a box or two,
+  // keep the board whenever it doesn't get worse — until the time budget
+  // runs out. The longest word dominates the score, so the search keeps
+  // pushing toward longer and longer words.
   async function generateLongWordBoard() {
-    const cells = state.rows * state.cols;
-    const candidates = cells <= 25 ? 60 : cells <= 36 ? 25 : 10;
+    if (!state.trie) return;
     el.richBtn.disabled = true;
-    let best = null;
-    let bestScore = -1;
-    let bestLongest = 0;
-    for (let i = 0; i < candidates; i++) {
-      const board = generateRandomBoard(state.rows, state.cols);
+    setOcrStatus('Optimizing board…');
+    await new Promise((r) => setTimeout(r, 0)); // let the status paint
+
+    const two = maxCellLetters() === 2;
+    const randCell = () => (two
+      ? randomDigraph()
+      : (Math.random() < 0.02 ? 'QU' : weightedRandomLetter().toUpperCase()));
+
+    const evaluate = (board) => {
       const lower = board.map((row) => row.map((cell) => cell.toLowerCase()));
       const words = solveBoggle(lower, state.trie, 6);
-      let score = 0;
       let longest = 0;
-      for (const word of words.keys()) {
-        score += word.length * word.length;
-        longest = Math.max(longest, word.length);
+      let bonus = 0;
+      for (const w of words.keys()) {
+        if (w.length > longest) longest = w.length;
+        bonus += w.length * w.length;
       }
-      score += longest * 200;
-      if (score > bestScore) {
-        bestScore = score;
-        best = board;
-        bestLongest = longest;
-      }
-      // yield to the browser occasionally so the UI doesn't freeze
-      if (i % 10 === 9) await new Promise((r) => setTimeout(r, 0));
+      return { score: longest * 1e7 + bonus, longest };
+    };
+
+    const deadline = performance.now() + 1500;
+    let best = randomBoardForMode();
+    let bestEval = evaluate(best);
+    for (let i = 0; i < 30 && performance.now() < deadline - 900; i++) {
+      const b = randomBoardForMode();
+      const ev = evaluate(b);
+      if (ev.score > bestEval.score) { best = b; bestEval = ev; }
     }
+    let iter = 0;
+    while (performance.now() < deadline) {
+      const b = best.map((row) => [...row]);
+      const mutations = 1 + (Math.random() < 0.3 ? 1 : 0);
+      for (let m = 0; m < mutations; m++) {
+        b[(Math.random() * state.rows) | 0][(Math.random() * state.cols) | 0] = randCell();
+      }
+      const ev = evaluate(b);
+      if (ev.score >= bestEval.score) { best = b; bestEval = ev; }
+      if (++iter % 25 === 0) await new Promise((r) => setTimeout(r, 0));
+    }
+
     el.richBtn.disabled = false;
     fillBoard(best);
-    setOcrStatus(bestLongest >= 6
-      ? `Board picked from ${candidates} rolls — its longest word has ${bestLongest} letters.`
-      : `Board picked from ${candidates} rolls.`);
+    setOcrStatus(`Optimized board — its longest word has ${bestEval.longest} letters. Hit “Find words” to reveal it.`);
   }
 
   // Size changes apply instantly — no separate button to remember.
   el.rowsInput.addEventListener('change', applyResize);
   el.colsInput.addEventListener('change', applyResize);
-  el.randomBtn.addEventListener('click', () => fillBoard(generateRandomBoard(state.rows, state.cols)));
+  el.randomBtn.addEventListener('click', () => fillBoard(randomBoardForMode()));
   el.richBtn.addEventListener('click', generateLongWordBoard);
   el.clearBtn.addEventListener('click', () => fillBoard(emptyBoard(state.rows, state.cols)));
   el.solveBtn.addEventListener('click', solve);
