@@ -9,11 +9,18 @@
 //   2. Otsu threshold to pure black/white
 //   3. auto polarity: if most pixels came out black the die is dark with
 //      light letters, so invert — Tesseract wants dark-on-light
-//   4. wipe a border ring so leftover tile edges don't read as strokes
-//   5. recognize as a single character; escalate to more attempts (looser
-//      crop, line mode for "Qu") only while confidence is poor
+//   4. connected-component cleanup: drop specks, glare blobs, tile-edge
+//      junk and the underline bar real Boggle dice print under M/W/Z
+//   5. recenter and scale the remaining glyph
+//   6. recognize as a single character; escalate to more modes, a looser
+//      crop, and 90/180/270 degree rotations (dice sit at random
+//      orientations!) only while confidence is poor
 // The best-confidence attempt wins, and low-confidence cells are flagged
 // for the user to review.
+
+const OCR_CELL_SIZE = 220;
+const GOOD_ENOUGH = 80; // stop trying more variants above this confidence
+const NEEDS_REVIEW = 55; // below this, flag the cell for the user to check
 
 function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
@@ -53,23 +60,61 @@ function otsuThreshold(gray) {
   return threshold;
 }
 
+// Flood-fill labelling of black pixels. Returns per-component pixel lists
+// with bounding boxes so the caller can decide what is glyph and what is
+// noise.
+function findComponents(binary, size) {
+  const labels = new Int32Array(binary.length).fill(-1);
+  const components = [];
+  const stack = [];
+
+  for (let start = 0; start < binary.length; start++) {
+    if (binary[start] !== 0 || labels[start] !== -1) continue;
+    const id = components.length;
+    const comp = { pixels: [], minX: size, maxX: 0, minY: size, maxY: 0 };
+    stack.push(start);
+    labels[start] = id;
+    while (stack.length) {
+      const p = stack.pop();
+      comp.pixels.push(p);
+      const px = p % size;
+      const py = (p / size) | 0;
+      if (px < comp.minX) comp.minX = px;
+      if (px > comp.maxX) comp.maxX = px;
+      if (py < comp.minY) comp.minY = py;
+      if (py > comp.maxY) comp.maxY = py;
+      const neighbors = [p - 1, p + 1, p - size, p + size];
+      for (const n of neighbors) {
+        if (n < 0 || n >= binary.length) continue;
+        if (Math.abs((n % size) - px) > 1) continue; // no row wrap
+        if (binary[n] === 0 && labels[n] === -1) {
+          labels[n] = id;
+          stack.push(n);
+        }
+      }
+    }
+    components.push(comp);
+  }
+  return components;
+}
+
 function preprocessCell(sourceCanvas, x, y, w, h, inset) {
+  const size = OCR_CELL_SIZE;
   const ix = x + w * inset;
   const iy = y + h * inset;
   const iw = w * (1 - 2 * inset);
   const ih = h * (1 - 2 * inset);
 
-  const size = 220;
-  const out = document.createElement('canvas');
-  out.width = size;
-  out.height = size;
-  const ctx = out.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, size, size);
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(sourceCanvas, ix, iy, iw, ih, 0, 0, size, size);
+  const work = document.createElement('canvas');
+  work.width = size;
+  work.height = size;
+  const wctx = work.getContext('2d', { willReadFrequently: true });
+  wctx.fillStyle = '#fff';
+  wctx.fillRect(0, 0, size, size);
+  wctx.imageSmoothingEnabled = true;
+  wctx.drawImage(sourceCanvas, ix, iy, iw, ih, 0, 0, size, size);
 
-  const imgData = ctx.getImageData(0, 0, size, size);
+  const imgData = wctx.getImageData(0, 0, size, size);
   const d = imgData.data;
 
   const gray = new Uint8ClampedArray(size * size);
@@ -86,33 +131,134 @@ function preprocessCell(sourceCanvas, x, y, w, h, inset) {
   for (let p = 0; p < gray.length; p++) if (gray[p] < threshold) darkCount++;
   const invert = darkCount > gray.length / 2;
 
-  const border = Math.round(size * 0.06);
+  const border = Math.round(size * 0.05);
+  const binary = new Uint8ClampedArray(size * size); // 0 = ink, 255 = paper
   for (let p = 0; p < gray.length; p++) {
     const px = p % size;
     const py = (p / size) | 0;
-    let v;
     if (px < border || px >= size - border || py < border || py >= size - border) {
-      v = 255; // wipe tile edges / grid-line remnants
-    } else {
-      v = gray[p] < threshold ? 0 : 255;
-      if (invert) v = 255 - v;
+      binary[p] = 255; // wipe tile edges / grid-line remnants
+      continue;
     }
-    const i = p * 4;
-    d[i] = d[i + 1] = d[i + 2] = v;
+    let v = gray[p] < threshold ? 0 : 255;
+    if (invert) v = 255 - v;
+    binary[p] = v;
   }
-  ctx.putImageData(imgData, 0, 0);
+
+  // Keep only components that look like part of a letter: big enough, not a
+  // giant failed-threshold blob, and near the middle. The wide flat bar that
+  // Boggle dice print under M, W and Z is excluded from the glyph but used
+  // as an orientation anchor: whichever edge the bar sits against is the
+  // letter's bottom, which is the only reliable way to tell a rotated M
+  // from W or Z from N.
+  const components = findComponents(binary, size);
+  const kept = [];
+  let hint = null; // degrees to rotate the cell so the letter is upright
+  let minX = size;
+  let maxX = 0;
+  let minY = size;
+  let maxY = 0;
+  for (const comp of components) {
+    const area = comp.pixels.length;
+    const cw = comp.maxX - comp.minX + 1;
+    const ch = comp.maxY - comp.minY + 1;
+    if (area < size * size * 0.002) continue; // speck
+    if (area > size * size * 0.6) continue; // glare/shadow blob
+
+    const wideBar = cw > size * 0.3 && ch < size * 0.12 && cw / ch >= 3;
+    const tallBar = ch > size * 0.3 && cw < size * 0.12 && ch / cw >= 3;
+    if (wideBar && comp.minY > size * 0.55) { hint = 0; continue; } // bar below: upright
+    if (wideBar && comp.maxY < size * 0.45) { hint = 180; continue; } // bar above: upside down
+    if (tallBar && comp.maxX < size * 0.45) { hint = 270; continue; } // bar left: rotated 90° cw
+    if (tallBar && comp.minX > size * 0.55) { hint = 90; continue; } // bar right: rotated 90° ccw
+
+    const cx = (comp.minX + comp.maxX) / 2;
+    const cy = (comp.minY + comp.maxY) / 2;
+    const central = cx > size * 0.12 && cx < size * 0.88 && cy > size * 0.12 && cy < size * 0.88;
+    if (!central) continue;
+    kept.push(comp);
+    if (comp.minX < minX) minX = comp.minX;
+    if (comp.maxX > maxX) maxX = comp.maxX;
+    if (comp.minY < minY) minY = comp.minY;
+    if (comp.maxY > maxY) maxY = comp.maxY;
+  }
+  if (kept.length === 0) hint = null; // a bar with no glyph means nothing
+
+  const out = document.createElement('canvas');
+  out.width = size;
+  out.height = size;
+  const octx = out.getContext('2d');
+  octx.fillStyle = '#fff';
+  octx.fillRect(0, 0, size, size);
+  if (kept.length === 0) return { canvas: out, hint }; // nothing recognizable
+
+  // Paint the kept components on a clean canvas...
+  const glyph = document.createElement('canvas');
+  glyph.width = size;
+  glyph.height = size;
+  const gctx = glyph.getContext('2d');
+  gctx.fillStyle = '#fff';
+  gctx.fillRect(0, 0, size, size);
+  const gData = gctx.getImageData(0, 0, size, size);
+  for (const comp of kept) {
+    for (const p of comp.pixels) {
+      const i = p * 4;
+      gData.data[i] = gData.data[i + 1] = gData.data[i + 2] = 0;
+    }
+  }
+  gctx.putImageData(gData, 0, 0);
+
+  // ...then recenter and scale it to a comfortable size for Tesseract.
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const target = size * 0.62;
+  const scale = Math.min(target / bw, target / bh, 3.5);
+  const dw = bw * scale;
+  const dh = bh * scale;
+  octx.imageSmoothingEnabled = true;
+  octx.drawImage(glyph, minX, minY, bw, bh, (size - dw) / 2, (size - dh) / 2, dw, dh);
+  return { canvas: out, hint };
+}
+
+function rotateCanvas(canvas, degrees) {
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate((degrees * Math.PI) / 180);
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
   return out;
 }
 
 async function recognizeAttempt(worker, canvas, psm) {
   await worker.setParameters({ tessedit_pageseg_mode: psm });
   const { data } = await worker.recognize(canvas);
-  const text = (data.text || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2);
-  return { text, confidence: text ? (data.confidence ?? 0) : -1 };
+  let text = (data.text || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2);
+  let confidence = text ? (data.confidence ?? 0) : -1;
+  // "Qu" is the only legitimate two-letter die; any other multi-letter read
+  // means the glyph confused the engine, so keep the first letter but leave
+  // the cell flagged for the user to check.
+  if (text.length === 2 && text !== 'QU') {
+    text = text[0];
+    confidence = Math.min(confidence, NEEDS_REVIEW - 5);
+  }
+  return { text, confidence };
 }
 
-const GOOD_ENOUGH = 80; // stop trying more variants above this confidence
-const NEEDS_REVIEW = 55; // below this, flag the cell for the user to check
+// Huge photos slow everything down without helping accuracy — the per-cell
+// canvases are only 220px anyway.
+function drawDownscaled(img) {
+  const maxDim = 1600;
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
 
 /**
  * @param {File} file
@@ -124,18 +270,15 @@ const NEEDS_REVIEW = 55; // below this, flag the cell for the user to check
  */
 async function recognizeBoardFromImage(file, rows, cols, onProgress) {
   if (typeof Tesseract === 'undefined') {
-    throw new Error('OCR engine failed to load (no internet connection?).');
+    throw new Error('OCR engine failed to load.');
   }
 
   const img = await loadImageFromFile(file);
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  canvas.getContext('2d').drawImage(img, 0, 0);
+  const canvas = drawDownscaled(img);
   URL.revokeObjectURL(img.src);
 
-  const cellW = img.width / cols;
-  const cellH = img.height / rows;
+  const cellW = canvas.width / cols;
+  const cellH = canvas.height / rows;
 
   // The whole engine is served with the app (vendor/), so OCR works without
   // any third-party CDN. Paths are absolutized so it also works when the app
@@ -167,34 +310,44 @@ async function recognizeBoardFromImage(file, rows, cols, onProgress) {
         const n = r * cols + c;
         if (onProgress) onProgress(`Reading letter ${n + 1} of ${rows * cols}…`, n / (rows * cols));
 
-        // Attempts, cheapest first. PSM 10 = single character (best for one
-        // letter); PSM 8 = single word; PSM 7 = one text line (both catch
-        // letters PSM 10 rejects, and the two-letter "Qu" die).
-        // A looser crop rescues letters that the tight inset clipped.
-        const attempts = [
-          { inset: 0.12, psm: '10' },
-          { inset: 0.12, psm: '8' },
-          { inset: 0.12, psm: '7' },
-          { inset: 0.04, psm: '10' },
-          { inset: 0.04, psm: '8' },
-          { inset: 0.04, psm: '7' },
-        ];
-
         let best = { text: '', confidence: -1 };
-        let cellCanvas = null;
-        let lastInset = null;
-        for (const a of attempts) {
-          if (a.inset !== lastInset) {
-            cellCanvas = preprocessCell(canvas, c * cellW, r * cellH, cellW, cellH, a.inset);
-            lastInset = a.inset;
-          }
-          const res = await recognizeAttempt(worker, cellCanvas, a.psm);
-          // Prefer a confident "QU" from line mode over a lone "Q".
-          const better = res.confidence > best.confidence
-            || (res.text.startsWith('Q') && res.text.length === 2 && best.text === 'Q'
-                && res.confidence > best.confidence - 15);
-          if (res.text && better) best = res;
+
+        // Stage 1 — upright attempts (pre-rotated when the die's underline
+        // told us its true orientation). PSM 10 = single character (best
+        // for one letter); PSM 8 = single word; PSM 7 = one text line (both
+        // catch letters PSM 10 rejects, and the two-letter "Qu" die). A
+        // looser crop rescues letters that the tight inset clipped.
+        const tight = preprocessCell(canvas, c * cellW, r * cellH, cellW, cellH, 0.12);
+        const tightCv = tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas;
+        for (const psm of ['10', '8', '7']) {
+          const res = await recognizeAttempt(worker, tightCv, psm);
+          if (res.text && res.confidence > best.confidence) best = res;
           if (best.confidence >= GOOD_ENOUGH) break;
+        }
+        if (best.confidence < GOOD_ENOUGH) {
+          const loose = preprocessCell(canvas, c * cellW, r * cellH, cellW, cellH, 0.04);
+          const looseHint = loose.hint ?? tight.hint;
+          const looseCv = looseHint ? rotateCanvas(loose.canvas, looseHint) : loose.canvas;
+          for (const psm of ['10', '8']) {
+            const res = await recognizeAttempt(worker, looseCv, psm);
+            if (res.text && res.confidence > best.confidence) best = res;
+            if (best.confidence >= GOOD_ENOUGH) break;
+          }
+        }
+
+        // Stage 2 — physical dice land at random orientations, so try the
+        // three other rotations while confidence is still poor. Skipped
+        // when the underline anchor already fixed the orientation: a
+        // rotated M reads as a confident W, so guessing would be worse.
+        if (best.confidence < GOOD_ENOUGH && tight.hint === null) {
+          outer: for (const deg of [90, 180, 270]) {
+            const rotated = rotateCanvas(tight.canvas, deg);
+            for (const psm of ['10', '8']) {
+              const res = await recognizeAttempt(worker, rotated, psm);
+              if (res.text && res.confidence > best.confidence) best = res;
+              if (best.confidence >= GOOD_ENOUGH) break outer;
+            }
+          }
         }
 
         rowLetters.push(best.text);

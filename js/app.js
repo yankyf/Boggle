@@ -85,6 +85,8 @@
 
         input.addEventListener('input', onCellInput);
         input.addEventListener('keydown', onCellKeydown);
+        // Select on focus so typing into a filled box replaces it.
+        input.addEventListener('focus', () => input.select());
 
         wrapper.appendChild(input);
         wrapper.appendChild(badge);
@@ -98,16 +100,16 @@
     const input = e.target;
     const r = Number(input.dataset.r);
     const c = Number(input.dataset.c);
-    const cleaned = input.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, maxCellLetters());
+    const limit = maxCellLetters();
+    const cleaned = input.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, limit);
     input.value = cleaned;
     state.board[r][c] = cleaned;
     input.classList.remove('needs-review');
     clearResults();
 
-    // Jump to the next box once this one has a letter — except after a lone
-    // "Q" in two-letter mode, where a "u" is probably coming next.
-    const waitForU = maxCellLetters() === 2 && cleaned === 'Q';
-    if (cleaned.length >= 1 && !waitForU) {
+    // Jump to the next box once this one is full: after 1 letter normally,
+    // after 2 letters when two-letter boxes are enabled.
+    if (cleaned.length >= limit) {
       focusCell(r, c + 1, r + 1, 0);
     }
   }
@@ -134,6 +136,10 @@
       const [nr, nc] = moves[e.key];
       const target = cellInput(nr, nc);
       if (target) target.focus();
+    } else if (e.key === ' ') {
+      // Space moves on — handy in two-letter mode after a single letter.
+      e.preventDefault();
+      focusCell(r, c + 1, r + 1, 0);
     } else if (e.key === 'Backspace' && !input.value) {
       const target = cellInput(r, c - 1) || (r > 0 ? cellInput(r - 1, state.cols - 1) : null);
       if (target) target.focus();
