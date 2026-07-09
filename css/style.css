@@ -88,10 +88,12 @@ body {
 }
 
 .logo-die {
-  font-size: 32px;
+  display: inline-flex;
   filter: drop-shadow(0 3px 4px rgba(20, 24, 60, 0.25));
   animation: die-drop 0.7s cubic-bezier(0.22, 1.4, 0.36, 1);
 }
+
+.logo-die svg { border-radius: 9px; }
 
 @keyframes die-drop {
   from { transform: translateY(-14px) rotate(-25deg); opacity: 0; }
@@ -397,6 +399,30 @@ body {
 }
 
 .results-summary:empty { display: none; }
+
+.results-search { margin-bottom: 12px; }
+
+.results-search input {
+  width: 100%;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--chip-bg);
+  color: var(--text);
+}
+
+.results-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.results-search input:disabled { opacity: 0.55; }
+
+.results-search input::placeholder { color: var(--muted); }
 
 .results-list {
   max-height: min(600px, 74vh);

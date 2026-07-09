@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Boggle Solver</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%234f46e5'/><stop offset='1' stop-color='%239333ea'/></linearGradient></defs><rect x='4' y='4' width='92' height='92' rx='22' fill='url(%23g)'/><rect x='10' y='10' width='80' height='80' rx='16' fill='white' fill-opacity='0.12'/><text x='50' y='72' font-size='62' font-weight='bold' text-anchor='middle' fill='white' font-family='Arial, sans-serif'>B</text></svg>" />
   <meta name="theme-color" content="#4f46e5" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -12,7 +12,19 @@
   <div class="app">
     <header class="appbar">
       <div class="appbar__inner">
-        <span class="logo-die">🎲</span>
+        <span class="logo-die" aria-hidden="true">
+          <svg width="36" height="36" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#4f46e5" />
+                <stop offset="1" stop-color="#9333ea" />
+              </linearGradient>
+            </defs>
+            <rect x="4" y="4" width="92" height="92" rx="22" fill="url(#logo-grad)" />
+            <rect x="10" y="10" width="80" height="80" rx="16" fill="white" fill-opacity="0.12" />
+            <text x="50" y="72" font-size="62" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial, sans-serif">B</text>
+          </svg>
+        </span>
         <div class="appbar__titles">
           <h1>Boggle Solver</h1>
           <p>Every word on the board, instantly — type it in or snap a photo.</p>
@@ -34,7 +46,7 @@
             Columns
             <input type="number" id="cols-input" min="3" max="10" value="4" />
           </label>
-          <span class="size-hint">3–10 · updates instantly</span>
+          <span class="size-hint">3–10</span>
         </div>
 
         <div class="toolbar">
@@ -45,7 +57,7 @@
             <span class="btn__icon">🏆</span> Long-word board
           </button>
           <label class="btn btn--tonal file-btn">
-            <span class="btn__icon">📷</span> Photo of board
+            <span class="btn__icon">📷</span> Upload board
             <input type="file" id="image-input" accept="image/*" hidden />
           </label>
           <button id="clear-btn" class="btn btn--tonal">
@@ -78,6 +90,9 @@
         <div class="results-header">
           <h2>Words found</h2>
           <div id="results-summary" class="results-summary"></div>
+        </div>
+        <div class="results-search">
+          <input type="search" id="word-search" placeholder="🔎 Search a word…" autocomplete="off" spellcheck="false" disabled />
         </div>
         <div id="results-list" class="results-list"></div>
       </section>

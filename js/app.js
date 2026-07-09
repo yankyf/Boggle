@@ -25,6 +25,7 @@
     dictStatus: document.getElementById('dict-status'),
     resultsSummary: document.getElementById('results-summary'),
     resultsList: document.getElementById('results-list'),
+    wordSearch: document.getElementById('word-search'),
   };
 
   function emptyBoard(rows, cols) {
@@ -184,6 +185,8 @@
     state.activeWord = null;
     el.resultsSummary.textContent = '';
     el.resultsList.innerHTML = '<div class="empty-state">No words yet — fill in the board and click "Find words".</div>';
+    el.wordSearch.value = '';
+    el.wordSearch.disabled = true;
     clearHighlight();
   }
 
@@ -245,14 +248,24 @@
       el.resultsList.innerHTML = '<div class="empty-state">No words found on this board.</div>';
       return;
     }
+    el.wordSearch.disabled = false;
 
-    const words = [...results.entries()].sort((a, b) => {
+    let words = [...results.entries()].sort((a, b) => {
       if (b[0].length !== a[0].length) return b[0].length - a[0].length;
       return a[0].localeCompare(b[0]);
     });
 
     const totalScore = words.reduce((s, [, v]) => s + v.score, 0);
     el.resultsSummary.textContent = `${words.length} word${words.length === 1 ? '' : 's'} · ${totalScore} pts`;
+
+    const query = el.wordSearch.value.replace(/[^a-zA-Z]/g, '').toLowerCase();
+    if (query) {
+      words = words.filter(([word]) => word.includes(query));
+      if (words.length === 0) {
+        el.resultsList.innerHTML = `<div class="empty-state">No word containing “${query}” on this board.</div>`;
+        return;
+      }
+    }
 
     const byLength = new Map();
     for (const [word, info] of words) {
@@ -351,6 +364,16 @@
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
   el.imageInput.addEventListener('change', handleImageUpload);
+  el.wordSearch.addEventListener('input', () => {
+    if (state.results) renderResults();
+  });
+  el.wordSearch.addEventListener('keydown', (e) => {
+    // Enter shows the first matching word's path on the board.
+    if (e.key === 'Enter') {
+      const chip = el.resultsList.querySelector('.word-chip');
+      if (chip) chip.click();
+    }
+  });
   window.addEventListener('resize', fitBoard);
 
   state.board = emptyBoard(state.rows, state.cols);
