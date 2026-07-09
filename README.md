@@ -45,11 +45,13 @@ Then open http://localhost:8000.
 - `js/solver.js` — DFS from every cell, pruned against the trie, collecting
   all words at or above the minimum length with standard Boggle scoring.
 - `js/dice.js` — real dice letter sets for random boards.
-- `js/ocr.js` — crops the uploaded image into a rows×cols grid and runs
-  Tesseract.js on each cell separately (much more reliable than OCR'ing the
-  whole board at once). Per cell: Otsu threshold, automatic light/dark
-  polarity, border cleanup, then several recognition modes escalating only
-  while confidence is low; uncertain cells are flagged red for review.
+- `js/ocr.js` — crops the uploaded image into a rows×cols grid and reads
+  each cell separately (much more reliable than OCR'ing the whole board at
+  once). Per cell: Otsu threshold, automatic light/dark polarity, border
+  cleanup, then two independent recognizers vote — Tesseract.js and a
+  shape-template matcher against rendered A–Z glyphs. When they agree the
+  read is trusted; when they disagree the cell is flagged red for review,
+  so a wrong letter is surfaced rather than silently accepted.
 - `vendor/tesseract/` — the OCR engine and English model, served with the
   app so it works offline and never depends on a third-party CDN.
 - `js/app.js` — UI state, grid rendering/editing, and results rendering.

@@ -292,6 +292,146 @@ function analyzeGlyph(canvas) {
   };
 }
 
+// --- Template matching: an independent second opinion --------------------
+//
+// Tesseract is a document-OCR engine; on a single isolated stylized glyph
+// it is only so-so, and it's a black box we can't tune. So we also match
+// each cleaned-up glyph directly against our own rendered A–Z shapes and
+// let the two recognizers vote. This is deterministic, and it's especially
+// strong on the clean high-contrast tiles you get from a screenshot or a
+// straight-on photo — exactly the cases Tesseract sometimes fumbles.
+
+const TPL_GRID = 32; // glyphs are normalized to a TPL_GRID×TPL_GRID bitmap
+const TPL_FIT = 24; // bounding box is scaled to fit this many cells, centered
+let LETTER_TEMPLATES = null;
+
+// Normalize any black-on-white raster into a scale/position-independent
+// binary bitmap: find the ink bounding box, scale it to fit TPL_FIT and
+// center it in a TPL_GRID grid. Both templates and live glyphs go through
+// this, so font size and placement differences cancel out.
+function normalizeGlyphGrid(imageData) {
+  const { width: W, height: H, data } = imageData;
+  let minX = W;
+  let maxX = -1;
+  let minY = H;
+  let maxY = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (data[(y * W + x) * 4] < 128) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  const grid = new Uint8Array(TPL_GRID * TPL_GRID);
+  if (maxX < 0) return grid;
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const scale = TPL_FIT / Math.max(bw, bh);
+  const offX = (TPL_GRID - bw * scale) / 2;
+  const offY = (TPL_GRID - bh * scale) / 2;
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      if (data[(y * W + x) * 4] < 128) {
+        const gx = Math.floor((x - minX) * scale + offX);
+        const gy = Math.floor((y - minY) * scale + offY);
+        if (gx >= 0 && gx < TPL_GRID && gy >= 0 && gy < TPL_GRID) {
+          grid[gy * TPL_GRID + gx] = 1;
+        }
+      }
+    }
+  }
+  return grid;
+}
+
+function buildLetterTemplates() {
+  if (LETTER_TEMPLATES) return LETTER_TEMPLATES;
+  // A few common board fonts so a die's typeface doesn't matter much.
+  const fonts = ['bold 150px Arial', 'bold 150px "Times New Roman"', 'bold 150px Georgia', '900 150px Arial'];
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 200;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  LETTER_TEMPLATES = [];
+  for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const grids = [];
+    for (const font of fonts) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, 200, 200);
+      ctx.fillStyle = '#000';
+      ctx.font = font;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ch, 100, 104);
+      grids.push(normalizeGlyphGrid(ctx.getImageData(0, 0, 200, 200)));
+    }
+    LETTER_TEMPLATES.push({ ch, grids });
+  }
+  return LETTER_TEMPLATES;
+}
+
+function iouScore(a, b) {
+  let inter = 0;
+  let union = 0;
+  for (let i = 0; i < a.length; i++) {
+    const on = a[i] | b[i];
+    if (on) {
+      union++;
+      if (a[i] & b[i]) inter++;
+    }
+  }
+  return union ? inter / union : 0;
+}
+
+// Returns the best-matching letter, a 0–100 confidence from the shape
+// overlap, and the margin over the runner-up (a small margin means two
+// letters matched about equally well — genuinely ambiguous).
+function templateMatch(cleanCanvas) {
+  const size = cleanCanvas.width;
+  const data = cleanCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, size, size);
+  const grid = normalizeGlyphGrid(data);
+  let ink = 0;
+  for (let i = 0; i < grid.length; i++) ink += grid[i];
+  if (ink < 8) return { text: '', confidence: -1, margin: 0 };
+
+  const templates = buildLetterTemplates();
+  let best = '';
+  let bestScore = 0;
+  let second = 0;
+  for (const { ch, grids } of templates) {
+    let s = 0;
+    for (const g of grids) {
+      const iou = iouScore(grid, g);
+      if (iou > s) s = iou;
+    }
+    if (s > bestScore) {
+      second = bestScore;
+      bestScore = s;
+      best = ch;
+    } else if (s > second) {
+      second = s;
+    }
+  }
+  return { text: best, confidence: Math.round(bestScore * 100), margin: bestScore - second };
+}
+
+// Fuse the two recognizers. Agreement is trusted (and un-flags a cell that
+// either alone was unsure about); disagreement keeps the more confident
+// read but flags it so the user reviews it instead of trusting a coin flip.
+function combineReads(tess, tpl) {
+  if (!tpl.text) return tess;
+  if (!tess.text) {
+    return { text: tpl.text, confidence: tpl.confidence, flagged: tpl.confidence < 62 || tpl.margin < 0.06 };
+  }
+  if (tess.text === tpl.text) {
+    return { text: tess.text, confidence: Math.max(tess.confidence, tpl.confidence, 82), flagged: false };
+  }
+  // Disagreement — pick the stronger, but never trust it silently.
+  const winner = tpl.confidence >= tess.confidence + 6 ? tpl : tess;
+  return { text: winner.text, confidence: Math.min(winner.confidence, NEEDS_REVIEW - 1), flagged: true };
+}
+
 async function recognizeAttempt(worker, canvas, psm) {
   await worker.setParameters({ tessedit_pageseg_mode: psm });
   const { data } = await worker.recognize(canvas);
@@ -654,8 +794,22 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
           }
         }
 
+        // Second opinion: shape-template match, then vote. Only the upright
+        // glyph is matched (rotation twins are already handled above), and
+        // never for the "Qu" die, which isn't a single shape.
+        let flagged = !best.text || best.confidence < NEEDS_REVIEW;
+        if (best.text !== 'QU') {
+          const tpl = templateMatch(tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas);
+          const fused = combineReads(
+            { text: best.text, confidence: Math.max(best.confidence, 0) },
+            tpl,
+          );
+          best = { text: fused.text, confidence: fused.confidence };
+          flagged = fused.flagged || !fused.text;
+        }
+
         rowLetters.push(best.text);
-        rowReview.push(!best.text || best.confidence < NEEDS_REVIEW);
+        rowReview.push(flagged);
       }
       board.push(rowLetters);
       review.push(rowReview);
