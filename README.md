@@ -23,7 +23,8 @@ Then open http://localhost:8000.
 
 ## Using it
 
-- **Rows / Cols**: set the board size (3–8 per side), then "Apply size".
+- **Rows / Columns**: set the board size (3–10 per side); the grid resizes
+  instantly as you change the numbers.
 - **Random board**: fills the grid using real physical Boggle dice sets
   for 4x4 and 5x5 (Big Boggle); other sizes use weighted-random letters.
 - **Long-word board**: rolls dozens of random boards behind the scenes,
@@ -53,5 +54,5 @@ Then open http://localhost:8000.
 
 - OCR assumes a fairly straight-on, evenly lit, tightly-cropped photo —
   always double check the detected letters before solving.
-- Board sizes are capped at 3–8 per side (Boggle boards are square in
+- Board sizes are capped at 3–10 per side (Boggle boards are square in
   practice, but rows/cols can differ if you want a rectangle).

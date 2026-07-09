@@ -1,6 +1,6 @@
 (() => {
   const MIN_SIZE = 3;
-  const MAX_SIZE = 8;
+  const MAX_SIZE = 10;
 
   const state = {
     rows: 4,
@@ -14,7 +14,6 @@
   const el = {
     rowsInput: document.getElementById('rows-input'),
     colsInput: document.getElementById('cols-input'),
-    resizeBtn: document.getElementById('resize-btn'),
     randomBtn: document.getElementById('random-btn'),
     richBtn: document.getElementById('rich-btn'),
     clearBtn: document.getElementById('clear-btn'),
@@ -41,12 +40,15 @@
     return document.getElementById(`cell-${r}-${c}`);
   }
 
-  // Letters scale with the actual rendered cell size so any board size fits
-  // the card without overflowing.
-  function fitCellFont() {
-    const cell = el.boardGrid.querySelector('.board-cell');
-    if (cell && cell.clientWidth) {
-      el.boardGrid.style.setProperty('--cell-fs', `${Math.max(11, Math.round(cell.clientWidth * 0.42))}px`);
+  // Rows must be sized explicitly from the measured column width: with only
+  // aspect-ratio on the cells, Chromium under-sizes the implicit grid rows
+  // and the bottom rows of big boards paint on top of the controls below.
+  // Letters scale with the cell size so any board size stays readable.
+  function fitBoard() {
+    const wrapper = el.boardGrid.querySelector('.cell-wrapper');
+    if (wrapper && wrapper.clientWidth) {
+      el.boardGrid.style.gridAutoRows = `${wrapper.clientWidth}px`;
+      el.boardGrid.style.setProperty('--cell-fs', `${Math.max(11, Math.round(wrapper.clientWidth * 0.42))}px`);
     }
   }
 
@@ -83,7 +85,7 @@
         el.boardGrid.appendChild(wrapper);
       }
     }
-    requestAnimationFrame(fitCellFont);
+    requestAnimationFrame(fitBoard);
   }
 
   function onCellInput(e) {
@@ -340,14 +342,16 @@
       : `Board picked from ${candidates} rolls.`);
   }
 
-  el.resizeBtn.addEventListener('click', applyResize);
+  // Size changes apply instantly — no separate button to remember.
+  el.rowsInput.addEventListener('change', applyResize);
+  el.colsInput.addEventListener('change', applyResize);
   el.randomBtn.addEventListener('click', () => fillBoard(generateRandomBoard(state.rows, state.cols)));
   el.richBtn.addEventListener('click', generateLongWordBoard);
   el.clearBtn.addEventListener('click', () => fillBoard(emptyBoard(state.rows, state.cols)));
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
   el.imageInput.addEventListener('change', handleImageUpload);
-  window.addEventListener('resize', fitCellFont);
+  window.addEventListener('resize', fitBoard);
 
   state.board = emptyBoard(state.rows, state.cols);
   renderGrid();

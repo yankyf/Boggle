@@ -9,40 +9,55 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div class="page">
-    <header class="page__header">
-      <h1><span class="logo-die">🎲</span> Boggle Solver</h1>
-      <p class="page__subtitle">Type in a board, or upload a photo of one, and find every word.</p>
+  <div class="app">
+    <header class="appbar">
+      <div class="appbar__inner">
+        <span class="logo-die">🎲</span>
+        <div class="appbar__titles">
+          <h1>Boggle Solver</h1>
+          <p>Every word on the board, instantly — type it in or snap a photo.</p>
+        </div>
+      </div>
     </header>
 
     <main class="layout">
-      <section class="card">
-        <div class="card__row controls">
+      <section class="card board-card">
+        <div class="section-label">Board</div>
+
+        <div class="size-row">
           <label class="field">
             Rows
-            <input type="number" id="rows-input" min="3" max="8" value="4" />
+            <input type="number" id="rows-input" min="3" max="10" value="4" />
           </label>
+          <span class="size-x">×</span>
           <label class="field">
-            Cols
-            <input type="number" id="cols-input" min="3" max="8" value="4" />
+            Columns
+            <input type="number" id="cols-input" min="3" max="10" value="4" />
           </label>
-          <button id="resize-btn" class="btn btn--ghost">Apply size</button>
-          <button id="random-btn" class="btn btn--ghost">🎲 Random board</button>
-          <button id="rich-btn" class="btn btn--ghost" disabled title="Generates many random boards and keeps the one with the most long words">🏆 Long-word board</button>
-          <button id="clear-btn" class="btn btn--ghost">Clear</button>
+          <span class="size-hint">3–10 · updates instantly</span>
         </div>
 
-        <div class="card__row upload-row">
-          <label class="btn btn--ghost file-btn">
-            📷 Upload board photo
+        <div class="toolbar">
+          <button id="random-btn" class="btn btn--tonal">
+            <span class="btn__icon">🎲</span> Shuffle letters
+          </button>
+          <button id="rich-btn" class="btn btn--tonal" disabled title="Rolls many boards and keeps the one hiding the most long words">
+            <span class="btn__icon">🏆</span> Long-word board
+          </button>
+          <label class="btn btn--tonal file-btn">
+            <span class="btn__icon">📷</span> Photo of board
             <input type="file" id="image-input" accept="image/*" hidden />
           </label>
-          <span id="ocr-status" class="ocr-status"></span>
+          <button id="clear-btn" class="btn btn--tonal">
+            <span class="btn__icon">🧹</span> Clear board
+          </button>
         </div>
+
+        <p id="ocr-status" class="status-line"></p>
 
         <div id="board-grid" class="board-grid"></div>
 
-        <div class="card__row solve-row">
+        <div class="solve-row">
           <label class="field">
             Min length
             <select id="min-length-input">
@@ -51,12 +66,15 @@
               <option value="5">5</option>
             </select>
           </label>
-          <button id="solve-btn" class="btn btn--primary" disabled>Find words</button>
-          <span id="dict-status" class="dict-status">Loading dictionary…</span>
+          <button id="solve-btn" class="btn btn--primary btn--big" disabled>
+            <span class="btn__icon">🔍</span> Find words
+          </button>
         </div>
+        <p id="dict-status" class="status-line status-line--center">Loading dictionary…</p>
       </section>
 
       <section class="card results-card">
+        <div class="section-label">Results</div>
         <div class="results-header">
           <h2>Words found</h2>
           <div id="results-summary" class="results-summary"></div>
