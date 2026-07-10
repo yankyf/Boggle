@@ -72,7 +72,9 @@
         input.type = 'text';
         input.id = `cell-${r}-${c}`;
         input.className = 'board-cell';
-        input.maxLength = maxCellLetters();
+        // Allow up to 2 letters when a cell already holds a multi-letter die
+        // (Qu, An, …) — e.g. from a photo — even in single-letter mode.
+        input.maxLength = Math.max(maxCellLetters(), (state.board[r][c] || '').length);
         input.autocomplete = 'off';
         input.spellcheck = false;
         input.value = state.board[r][c] || '';
@@ -334,11 +336,9 @@
       const { board, review } = await recognizeBoardFromCanvas(prep.canvas, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
       }, prep.size ? prep.size.cuts : null, prep.cells);
-      const limit = maxCellLetters();
-      state.board = board.map((row) => row.map((cell) => {
-        const v = cell === 'Q' && limit === 2 ? 'QU' : cell;
-        return v.slice(0, limit);
-      }));
+      // Keep detected multi-letter dice (Qu, An, …) as-is — capped at 2 —
+      // even in single-letter mode, so a real board's special dice survive.
+      state.board = board.map((row) => row.map((cell) => (cell || '').slice(0, 2)));
       renderGrid();
       clearResults();
       for (let r = 0; r < state.rows; r++) {

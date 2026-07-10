@@ -184,40 +184,110 @@ function preprocessCell(sourceCanvas, x, y, w, h, inset) {
   }
   if (kept.length === 0) hint = null; // a bar with no glyph means nothing
 
-  const out = document.createElement('canvas');
-  out.width = size;
-  out.height = size;
-  const octx = out.getContext('2d');
-  octx.fillStyle = '#fff';
-  octx.fillRect(0, 0, size, size);
-  if (kept.length === 0) return { canvas: out, hint }; // nothing recognizable
+  if (kept.length === 0) {
+    const blank = document.createElement('canvas');
+    blank.width = blank.height = size;
+    const bctx = blank.getContext('2d');
+    bctx.fillStyle = '#fff';
+    bctx.fillRect(0, 0, size, size);
+    return { canvas: blank, hint, parts: null }; // nothing recognizable
+  }
 
-  // Paint the kept components on a clean canvas...
-  const glyph = document.createElement('canvas');
-  glyph.width = size;
-  glyph.height = size;
-  const gctx = glyph.getContext('2d');
-  gctx.fillStyle = '#fff';
-  gctx.fillRect(0, 0, size, size);
-  const gData = gctx.getImageData(0, 0, size, size);
-  for (const comp of kept) {
-    for (const p of comp.pixels) {
-      const i = p * 4;
-      gData.data[i] = gData.data[i + 1] = gData.data[i + 2] = 0;
+  // Paint a set of components onto a clean canvas, recentered and scaled to
+  // a comfortable size for the recognizer.
+  const renderGlyph = (comps) => {
+    let lminX = size;
+    let lmaxX = 0;
+    let lminY = size;
+    let lmaxY = 0;
+    const glyph = document.createElement('canvas');
+    glyph.width = glyph.height = size;
+    const gctx = glyph.getContext('2d');
+    gctx.fillStyle = '#fff';
+    gctx.fillRect(0, 0, size, size);
+    const gData = gctx.getImageData(0, 0, size, size);
+    for (const comp of comps) {
+      if (comp.minX < lminX) lminX = comp.minX;
+      if (comp.maxX > lmaxX) lmaxX = comp.maxX;
+      if (comp.minY < lminY) lminY = comp.minY;
+      if (comp.maxY > lmaxY) lmaxY = comp.maxY;
+      for (const p of comp.pixels) {
+        const i = p * 4;
+        gData.data[i] = gData.data[i + 1] = gData.data[i + 2] = 0;
+      }
+    }
+    gctx.putImageData(gData, 0, 0);
+
+    const out = document.createElement('canvas');
+    out.width = out.height = size;
+    const octx = out.getContext('2d');
+    octx.fillStyle = '#fff';
+    octx.fillRect(0, 0, size, size);
+    const bw = lmaxX - lminX + 1;
+    const bh = lmaxY - lminY + 1;
+    const target = size * 0.62;
+    const scale = Math.min(target / bw, target / bh, 3.5);
+    const dw = bw * scale;
+    const dh = bh * scale;
+    octx.imageSmoothingEnabled = true;
+    octx.drawImage(glyph, lminX, lminY, bw, bh, (size - dw) / 2, (size - dh) / 2, dw, dh);
+    return out;
+  };
+
+  // A multi-letter die (like "Qu" or "An") shows up as two separate,
+  // comparably sized letter blobs sitting side by side with a clear gap.
+  // Detect that so each letter can be read on its own, then rejoined.
+  const parts = detectTwoLetterSplit(kept, size, renderGlyph);
+
+  return { canvas: renderGlyph(kept), hint, parts };
+}
+
+// Given the kept letter components, decide whether they form two side-by-side
+// letters (a multi-letter die) rather than one. Uppercase letters are each a
+// single connected blob, so two comparable blobs with a horizontal gap and
+// good vertical overlap is a strong two-letter signal. Returns two rendered
+// glyph canvases (left, right) or null.
+function detectTwoLetterSplit(kept, size, renderGlyph) {
+  if (kept.length < 2) return null;
+
+  // Cluster components by horizontal position: overlapping/adjacent x-ranges
+  // belong to the same letter.
+  const sorted = [...kept].sort((a, b) => a.minX - b.minX);
+  const clusters = [];
+  for (const comp of sorted) {
+    const cur = clusters[clusters.length - 1];
+    if (cur && comp.minX <= cur.maxX + size * 0.03) {
+      cur.comps.push(comp);
+      cur.minX = Math.min(cur.minX, comp.minX);
+      cur.maxX = Math.max(cur.maxX, comp.maxX);
+      cur.minY = Math.min(cur.minY, comp.minY);
+      cur.maxY = Math.max(cur.maxY, comp.maxY);
+    } else {
+      clusters.push({ comps: [comp], minX: comp.minX, maxX: comp.maxX, minY: comp.minY, maxY: comp.maxY });
     }
   }
-  gctx.putImageData(gData, 0, 0);
+  if (clusters.length !== 2) return null;
 
-  // ...then recenter and scale it to a comfortable size for Tesseract.
-  const bw = maxX - minX + 1;
-  const bh = maxY - minY + 1;
-  const target = size * 0.62;
-  const scale = Math.min(target / bw, target / bh, 3.5);
-  const dw = bw * scale;
-  const dh = bh * scale;
-  octx.imageSmoothingEnabled = true;
-  octx.drawImage(glyph, minX, minY, bw, bh, (size - dw) / 2, (size - dh) / 2, dw, dh);
-  return { canvas: out, hint };
+  const [a, b] = clusters;
+  const aw = a.maxX - a.minX + 1;
+  const bw = b.maxX - b.minX + 1;
+  const ah = a.maxY - a.minY + 1;
+  const bh = b.maxY - b.minY + 1;
+  const gap = b.minX - a.maxX;
+
+  // Each cluster must be a plausible letter with a real gap and a shared
+  // vertical band (side by side, not stacked/diagonal). Multi-letter dice
+  // are usually a capital + a lowercase (An, Qu, Th…), so the second letter
+  // is shorter — the size limits are generous to allow that.
+  if (Math.min(aw, bw) < size * 0.08 || Math.min(ah, bh) < size * 0.16) return null;
+  if (Math.max(aw, bw) > size * 0.55) return null;
+  if (gap < size * 0.015 || gap > size * 0.38) return null;
+  if (Math.max(ah, bh) / Math.min(ah, bh) > 2.6) return null;
+  // They must share the lower band (both sit on the die's baseline).
+  const overlap = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+  if (overlap < Math.min(ah, bh) * 0.35) return null;
+
+  return [renderGlyph(a.comps), renderGlyph(b.comps)];
 }
 
 function rotateCanvas(canvas, degrees) {
@@ -353,20 +423,24 @@ function buildLetterTemplates() {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 200;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const render = (glyph) => {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, 200, 200);
+    ctx.fillStyle = '#000';
+    ctx.font = glyph.font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(glyph.ch, 100, 104);
+    return normalizeGlyphGrid(ctx.getImageData(0, 0, 200, 200));
+  };
   LETTER_TEMPLATES = [];
   for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
-    const grids = [];
-    for (const font of fonts) {
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, 200, 200);
-      ctx.fillStyle = '#000';
-      ctx.font = font;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(ch, 100, 104);
-      grids.push(normalizeGlyphGrid(ctx.getImageData(0, 0, 200, 200)));
-    }
-    LETTER_TEMPLATES.push({ ch, grids });
+    // Uppercase grids for normal single-letter reading; lowercase grids kept
+    // separately for the trailing letter of a multi-letter die (An, Qu, Th…),
+    // which is printed lowercase — always mapped back to the capital.
+    const grids = fonts.map((font) => render({ ch, font }));
+    const lowerGrids = fonts.map((font) => render({ ch: ch.toLowerCase(), font }));
+    LETTER_TEMPLATES.push({ ch, grids, lowerGrids });
   }
   return LETTER_TEMPLATES;
 }
@@ -387,7 +461,7 @@ function iouScore(a, b) {
 // Returns the best-matching letter, a 0–100 confidence from the shape
 // overlap, and the margin over the runner-up (a small margin means two
 // letters matched about equally well — genuinely ambiguous).
-function templateMatch(cleanCanvas) {
+function templateMatch(cleanCanvas, allowLowercase = false) {
   const size = cleanCanvas.width;
   const data = cleanCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, size, size);
   const grid = normalizeGlyphGrid(data);
@@ -399,16 +473,22 @@ function templateMatch(cleanCanvas) {
   let best = '';
   let bestScore = 0;
   let second = 0;
-  for (const { ch, grids } of templates) {
+  for (const entry of templates) {
     let s = 0;
-    for (const g of grids) {
+    for (const g of entry.grids) {
       const iou = iouScore(grid, g);
       if (iou > s) s = iou;
+    }
+    if (allowLowercase) {
+      for (const g of entry.lowerGrids) {
+        const iou = iouScore(grid, g);
+        if (iou > s) s = iou;
+      }
     }
     if (s > bestScore) {
       second = bestScore;
       bestScore = s;
-      best = ch;
+      best = entry.ch;
     } else if (s > second) {
       second = s;
     }
@@ -417,19 +497,45 @@ function templateMatch(cleanCanvas) {
 }
 
 // Fuse the two recognizers. Agreement is trusted (and un-flags a cell that
-// either alone was unsure about); disagreement keeps the more confident
-// read but flags it so the user reviews it instead of trusting a coin flip.
+// either alone was unsure about). On disagreement the more confident read
+// wins, and it's only flagged when that winner isn't itself convincing —
+// so a clearly-correct letter doesn't turn the cell red, but a genuine
+// coin-flip does.
 function combineReads(tess, tpl) {
-  if (!tpl.text) return tess;
+  if (!tpl.text) {
+    return { text: tess.text, confidence: tess.confidence, flagged: !tess.text || tess.confidence < NEEDS_REVIEW };
+  }
   if (!tess.text) {
     return { text: tpl.text, confidence: tpl.confidence, flagged: tpl.confidence < 62 || tpl.margin < 0.06 };
   }
   if (tess.text === tpl.text) {
     return { text: tess.text, confidence: Math.max(tess.confidence, tpl.confidence, 82), flagged: false };
   }
-  // Disagreement — pick the stronger, but never trust it silently.
+  // Disagreement — pick the stronger, but flag it: on a real board this is
+  // usually a genuinely ambiguous die (a rotated letter that reads as two
+  // different letters), which is exactly what the reviewer should check.
   const winner = tpl.confidence >= tess.confidence + 6 ? tpl : tess;
   return { text: winner.text, confidence: Math.min(winner.confidence, NEEDS_REVIEW - 1), flagged: true };
+}
+
+// Read one already-cleaned, upright glyph canvas: Tesseract + geometric
+// rescue + template vote. No rotation handling (used for the halves of a
+// multi-letter die, which sit upright next to each other).
+async function readGlyph(worker, glyphCanvas) {
+  let best = { text: '', confidence: -1 };
+  for (const psm of ['10', '8']) {
+    const res = await recognizeAttempt(worker, glyphCanvas, psm);
+    if (res.text && res.confidence > best.confidence) best = res;
+    if (best.confidence >= GOOD_ENOUGH) break;
+  }
+  const shape = analyzeGlyph(glyphCanvas);
+  if (shape) {
+    if (!best.text && shape.barLike) best = { text: 'I', confidence: 75 };
+    else if (best.text === 'C' && shape.hasHole) best = { text: 'O', confidence: Math.max(best.confidence, 75) };
+    else if (!best.text && shape.hasHole) best = { text: 'O', confidence: NEEDS_REVIEW - 5 };
+  }
+  const tpl = templateMatch(glyphCanvas, true); // allow lowercase (An, Qu, …)
+  return combineReads({ text: (best.text || '').slice(0, 1), confidence: Math.max(best.confidence, 0) }, tpl);
 }
 
 async function recognizeAttempt(worker, canvas, psm) {
@@ -870,6 +976,19 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
         // looser crop rescues letters that the tight inset clipped.
         const [cx, cy, cw, ch] = cellRect(r, c);
         const tight = preprocessCell(canvas, cx, cy, cw, ch, 0.12);
+
+        // Multi-letter die (Qu, An, …): read each half and rejoin.
+        if (tight.parts) {
+          const left = await readGlyph(worker, tight.parts[0]);
+          const right = await readGlyph(worker, tight.parts[1]);
+          if (left.text && right.text) {
+            rowLetters.push(left.text + right.text);
+            rowReview.push(left.flagged || right.flagged);
+            continue;
+          }
+          // Otherwise fall through and read the cell as a single glyph.
+        }
+
         const tightCv = tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas;
         for (const psm of ['10', '8', '7']) {
           const res = await recognizeAttempt(worker, tightCv, psm);
