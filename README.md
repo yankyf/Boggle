@@ -58,7 +58,10 @@ Then open http://localhost:8000.
 
 ## Limitations
 
-- OCR assumes a fairly straight-on, evenly lit, tightly-cropped photo —
-  always double check the detected letters before solving.
+- OCR handles real tray photos (patterned backgrounds, mild tilt, rotated
+  dice, uneven light) by detecting each die individually, but always double
+  check the detected letters before solving. Letters that are rotations of
+  each other (M/W, A/V, Z/N) are flagged red when the die has no underline
+  to anchor its orientation.
 - Board sizes are capped at 3–10 per side (Boggle boards are square in
   practice, but rows/cols can differ if you want a rectangle).

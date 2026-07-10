@@ -62,8 +62,8 @@ function otsuThreshold(gray) {
 
 // Flood-fill labelling of black pixels. Returns per-component pixel lists
 // with bounding boxes so the caller can decide what is glyph and what is
-// noise.
-function findComponents(binary, size) {
+// noise. Works on any width×height raster (height defaults to width).
+function findComponents(binary, width, height = width) {
   const labels = new Int32Array(binary.length).fill(-1);
   const components = [];
   const stack = [];
@@ -71,22 +71,22 @@ function findComponents(binary, size) {
   for (let start = 0; start < binary.length; start++) {
     if (binary[start] !== 0 || labels[start] !== -1) continue;
     const id = components.length;
-    const comp = { pixels: [], minX: size, maxX: 0, minY: size, maxY: 0 };
+    const comp = { pixels: [], minX: width, maxX: 0, minY: height, maxY: 0 };
     stack.push(start);
     labels[start] = id;
     while (stack.length) {
       const p = stack.pop();
       comp.pixels.push(p);
-      const px = p % size;
-      const py = (p / size) | 0;
+      const px = p % width;
+      const py = (p / width) | 0;
       if (px < comp.minX) comp.minX = px;
       if (px > comp.maxX) comp.maxX = px;
       if (py < comp.minY) comp.minY = py;
       if (py > comp.maxY) comp.maxY = py;
-      const neighbors = [p - 1, p + 1, p - size, p + size];
+      const neighbors = [p - 1, p + 1, p - width, p + width];
       for (const n of neighbors) {
         if (n < 0 || n >= binary.length) continue;
-        if (Math.abs((n % size) - px) > 1) continue; // no row wrap
+        if (Math.abs((n % width) - px) > 1) continue; // no row wrap
         if (binary[n] === 0 && labels[n] === -1) {
           labels[n] = id;
           stack.push(n);
@@ -607,30 +607,158 @@ function estimateFromCanvas(canvas) {
   return rows && cols ? { rows, cols, cuts: null } : null;
 }
 
+// --- Physical-board detection: find each die as a bright blob ------------
+//
+// A real photo of a Boggle tray defeats grid-cutting: the board sits on a
+// patterned surface, the photo is slightly tilted, and the dice are 3D so
+// side faces leak partial letters into neighboring cells. But the die faces
+// themselves are unmistakable — bright, unsaturated squares against a dark
+// tray. So instead of slicing the image, find every die individually and
+// read each one where it actually sits. Tilt then barely matters, and the
+// tablecloth never enters a cell.
+
+function findDiceGrid(canvas) {
+  const { width: W, height: H } = canvas;
+  const total = W * H;
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H).data;
+
+  // Candidate die pixels: noticeably brighter than their local
+  // surroundings (dice sit in a dark tray) and unsaturated (ivory/white
+  // plastic). Local contrast instead of a global threshold makes bright
+  // backgrounds (tablecloths) cancel out and lighting gradients harmless.
+  const values = new Float64Array(total);
+  for (let p = 0; p < total; p++) {
+    values[p] = (d[p * 4] + d[p * 4 + 1] + d[p * 4 + 2]) / 3;
+  }
+
+  // Local mean via summed-area table.
+  const sat2 = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < W; x++) {
+      rowSum += values[y * W + x];
+      sat2[(y + 1) * (W + 1) + (x + 1)] = sat2[y * (W + 1) + (x + 1)] + rowSum;
+    }
+  }
+  const radius = Math.max(20, Math.round(Math.min(W, H) / 10));
+  const localMean = (x, y) => {
+    const x0 = Math.max(0, x - radius);
+    const y0 = Math.max(0, y - radius);
+    const x1 = Math.min(W - 1, x + radius);
+    const y1 = Math.min(H - 1, y + radius);
+    const sum = sat2[(y1 + 1) * (W + 1) + (x1 + 1)] - sat2[y0 * (W + 1) + (x1 + 1)]
+      - sat2[(y1 + 1) * (W + 1) + x0] + sat2[y0 * (W + 1) + x0];
+    return sum / ((x1 - x0 + 1) * (y1 - y0 + 1));
+  };
+
+  const bright = new Uint8ClampedArray(total);
+  for (let p = 0; p < total; p++) {
+    const r = d[p * 4];
+    const g = d[p * 4 + 1];
+    const b = d[p * 4 + 2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const satVal = max === 0 ? 0 : (max - min) / max;
+    const rel = values[p] / (localMean(p % W, (p / W) | 0) + 1);
+    bright[p] = rel > 1.13 && satVal < 0.35 ? 0 : 255; // 0 = candidate
+  }
+
+  // Connected components over candidate pixels (0 = candidate).
+  const comps = findComponents(bright, W, H);
+
+  // Keep die-shaped blobs: squarish, solid, sensible size.
+  let dice = [];
+  for (const c of comps) {
+    const w = c.maxX - c.minX + 1;
+    const h = c.maxY - c.minY + 1;
+    const area = c.pixels.length;
+    if (area < total / 3000 || area > total / 25) continue;
+    const aspect = w / h;
+    if (aspect < 0.6 || aspect > 1.7) continue;
+    if (area / (w * h) < 0.55) continue; // not solid enough (flower, glare streak)
+    dice.push({ x: (c.minX + c.maxX) / 2, y: (c.minY + c.maxY) / 2, w, h, minX: c.minX, minY: c.minY });
+  }
+  if (dice.length < 9) return null;
+
+  // Keep the dominant size class (drops stray background blobs).
+  const areas = dice.map((t) => t.w * t.h).sort((a, b) => a - b);
+  const median = areas[(areas.length / 2) | 0];
+  dice = dice.filter((t) => t.w * t.h > median * 0.4 && t.w * t.h < median * 2.5);
+  if (dice.length < 9) return null;
+  const dieSize = Math.sqrt(median);
+
+  // Drop isolated blobs: a die always has a grid neighbor nearby.
+  dice = dice.filter((a) => dice.some((b) => {
+    if (a === b) return false;
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy) < dieSize * 2.4;
+  }));
+  if (dice.length < 9) return null;
+
+  // Cluster into rows by y (tolerates a few degrees of tilt), then order
+  // each row by x. Rank-in-row gives the column, so mild tilt is harmless.
+  dice.sort((a, b) => a.y - b.y);
+  const rows = [];
+  for (const die of dice) {
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(die.y - row.meanY) < dieSize * 0.55) {
+      row.dice.push(die);
+      row.meanY += (die.y - row.meanY) / row.dice.length;
+    } else {
+      rows.push({ meanY: die.y, dice: [die] });
+    }
+  }
+
+  // A real board has equal-length rows; anything else means detection noise.
+  const counts = rows.map((r) => r.dice.length);
+  const cols = counts[0];
+  if (rows.length < 3 || rows.length > 10 || cols < 3 || cols > 10) return null;
+  if (counts.some((c) => c !== cols)) return null;
+
+  const pad = dieSize * 0.06;
+  const cells = rows.map((row) => {
+    row.dice.sort((a, b) => a.x - b.x);
+    return row.dice.map((t) => [
+      Math.max(0, t.minX - pad),
+      Math.max(0, t.minY - pad),
+      Math.min(W - t.minX, t.w + 2 * pad),
+      Math.min(H - t.minY, t.h + 2 * pad),
+    ]);
+  });
+  return { rows: rows.length, cols, cells };
+}
+
 /**
- * Load the photo and decide which framing to read it with. A tightly
- * cropped image usually shows a confident grid as-is; an uncropped photo
- * shows one only after the quiet margins are trimmed. The size estimate
- * and the canvas must come from the same framing, or the cell-splitting
- * misaligns with the tiles.
+ * Load the photo and decide which framing to read it with. Physical-board
+ * photos are handled by per-die blob detection; screenshots and clean
+ * scans by profile segmentation; uncropped variants of those by trimming
+ * quiet margins first. The size estimate and the canvas must come from the
+ * same framing, or the cell-splitting misaligns with the tiles.
  *
  * @param {File} file
- * @returns {Promise<{canvas: HTMLCanvasElement, size: {rows: number, cols: number} | null}>}
+ * @returns {Promise<{canvas, size: {rows, cols, cuts?} | null, cells: number[][][] | null}>}
  */
 async function prepareBoardImage(file) {
   const img = await loadImageFromFile(file);
   const original = drawDownscaled(img);
   URL.revokeObjectURL(img.src);
 
+  // Physical photo path: find the dice themselves.
+  const grid = findDiceGrid(original);
+  if (grid) {
+    return { canvas: original, size: { rows: grid.rows, cols: grid.cols, cuts: null }, cells: grid.cells };
+  }
+
   let size = estimateFromCanvas(original);
-  if (size) return { canvas: original, size };
+  if (size) return { canvas: original, size, cells: null };
 
   const cropped = autoCropBoard(original);
   if (cropped !== original) {
     size = estimateFromCanvas(cropped);
-    if (size) return { canvas: cropped, size };
+    if (size) return { canvas: cropped, size, cells: null };
   }
-  return { canvas: cropped, size: null };
+  return { canvas: cropped, size: null, cells: null };
 }
 
 // Guess how many rows/cols the photographed board has. Along the boundary
@@ -683,20 +811,25 @@ function bestDivisions(profile, length) {
  * @param {(status: string, progress: number) => void} onProgress
  * @param {{x: number[], y: number[]} | null} cuts - exact cell boundaries
  *   from segmentation; falls back to uniform division without them
+ * @param {number[][][] | null} cells - per-die [x, y, w, h] rects from blob
+ *   detection; takes precedence over cuts
  * @returns {Promise<{board: string[][], review: boolean[][]}>}
  *   board: uppercase cell strings; review: cells the user should double-check
  */
-async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = null) {
+async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = null, cells = null) {
   if (typeof Tesseract === 'undefined') {
     throw new Error('OCR engine failed to load.');
   }
 
   const cellW = canvas.width / cols;
   const cellH = canvas.height / rows;
-  const useCuts = cuts && cuts.x.length === cols + 1 && cuts.y.length === rows + 1;
-  const cellRect = (r, c) => (useCuts
-    ? [cuts.x[c], cuts.y[r], cuts.x[c + 1] - cuts.x[c], cuts.y[r + 1] - cuts.y[r]]
-    : [c * cellW, r * cellH, cellW, cellH]);
+  const useCells = cells && cells.length === rows && cells.every((row) => row.length === cols);
+  const useCuts = !useCells && cuts && cuts.x.length === cols + 1 && cuts.y.length === rows + 1;
+  const cellRect = (r, c) => {
+    if (useCells) return cells[r][c];
+    if (useCuts) return [cuts.x[c], cuts.y[r], cuts.x[c + 1] - cuts.x[c], cuts.y[r + 1] - cuts.y[r]];
+    return [c * cellW, r * cellH, cellW, cellH];
+  };
 
   // The whole engine is served with the app (vendor/), so OCR works without
   // any third-party CDN. Paths are absolutized so it also works when the app
@@ -754,36 +887,9 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
           }
         }
 
-        // Stage 2 — physical dice land at random orientations, so try the
-        // three other rotations, but ONLY when the upright reading came up
-        // basically empty: an upright W reads as a MORE confident M when
-        // turned upside down, so rotating a readable glyph makes things
-        // worse, not better. Skipped when the underline anchor already
-        // fixed the orientation. Letters that are each other's rotations
-        // (M/W, A/V upside down; Z/N sideways) are mapped back to their
-        // upright interpretation and flagged, since without an underline
-        // the orientation is genuinely ambiguous.
-        if (best.confidence < 30 && tight.hint === null) {
-          const TWIN_180 = { M: 'W', W: 'M', A: 'V', V: 'A' };
-          const TWIN_90 = { Z: 'N', N: 'Z' };
-          outer: for (const deg of [90, 180, 270]) {
-            const rotated = rotateCanvas(tight.canvas, deg);
-            for (const psm of ['10', '8']) {
-              const res = await recognizeAttempt(worker, rotated, psm);
-              if (!res.text) continue;
-              const twin = deg === 180 ? TWIN_180[res.text] : TWIN_90[res.text];
-              if (twin) {
-                res.text = twin;
-                res.confidence = Math.min(res.confidence, NEEDS_REVIEW - 5);
-              }
-              if (res.confidence > best.confidence) best = res;
-              if (best.confidence >= GOOD_ENOUGH) break outer;
-            }
-          }
-        }
-
         // Geometric rescue for Tesseract's isolated-glyph blind spots.
-        const shape = analyzeGlyph(tight.canvas);
+        const uprightCv = tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas;
+        const shape = analyzeGlyph(uprightCv);
         if (shape) {
           if (!best.text && shape.barLike) {
             best = { text: 'I', confidence: 75 };
@@ -794,16 +900,52 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
           }
         }
 
-        // Second opinion: shape-template match, then vote. Only the upright
-        // glyph is matched (rotation twins are already handled above), and
-        // never for the "Qu" die, which isn't a single shape.
+        // Second opinion: shape-template match, then vote. Never for the
+        // "Qu" die, which isn't a single shape.
         let flagged = !best.text || best.confidence < NEEDS_REVIEW;
         if (best.text !== 'QU') {
-          const tpl = templateMatch(tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas);
-          const fused = combineReads(
+          const tpl = templateMatch(uprightCv);
+          let fused = combineReads(
             { text: best.text, confidence: Math.max(best.confidence, 0) },
             tpl,
           );
+
+          // Physical dice land at random orientations. When no underline
+          // fixed the orientation, template-match the three rotations
+          // (cheap — no OCR call). If one matches decisively better than
+          // the upright reading, re-read at that angle: an upside-down A
+          // reads as a confident V, a rotated D as an O — only the
+          // rotation contest exposes them. Letters that are their own
+          // rotation twins (M/W, A/V upside down; Z/N sideways) stay
+          // flagged when adopted this way: without an underline the
+          // orientation is genuinely ambiguous.
+          if (tight.hint === null) {
+            const ROTATION_TWINS = new Set(['M', 'W', 'A', 'V', 'Z', 'N']);
+            let bestDeg = 0;
+            let bestTpl = tpl;
+            for (const deg of [90, 180, 270]) {
+              const t = templateMatch(rotateCanvas(tight.canvas, deg));
+              if (t.text && t.confidence > bestTpl.confidence) {
+                bestTpl = t;
+                bestDeg = deg;
+              }
+            }
+            if (bestDeg !== 0 && bestTpl.confidence >= Math.max(tpl.confidence + 8, 55)) {
+              const rotated = rotateCanvas(tight.canvas, bestDeg);
+              const tessRot = await recognizeAttempt(worker, rotated, '10');
+              const fusedRot = combineReads(
+                { text: tessRot.text, confidence: Math.max(tessRot.confidence, 0) },
+                bestTpl,
+              );
+              if (fusedRot.text && fusedRot.confidence > fused.confidence) {
+                fused = fusedRot;
+                if (ROTATION_TWINS.has(fusedRot.text)) {
+                  fused = { ...fusedRot, confidence: Math.min(fusedRot.confidence, NEEDS_REVIEW - 1), flagged: true };
+                }
+              }
+            }
+          }
+
           best = { text: fused.text, confidence: fused.confidence };
           flagged = fused.flagged || !fused.text;
         }
