@@ -27,7 +27,27 @@
     resultsList: document.getElementById('results-list'),
     wordSearch: document.getElementById('word-search'),
     twoLetterToggle: document.getElementById('two-letter-toggle'),
+    wordLevel: document.getElementById('word-level'),
   };
+
+  // Commonness tiers (cumulative supersets). Loaded lazily the first time a
+  // level is chosen; "all" needs no set.
+  const LEVEL_FILES = {
+    everyday: 'data/words-everyday.txt',
+    common: 'data/words-common.txt',
+    broad: 'data/words-broad.txt',
+  };
+  const wordSets = {}; // level -> Set(word)
+
+  async function loadWordSet(level) {
+    if (level === 'all') return null;
+    if (wordSets[level]) return wordSets[level];
+    const res = await fetch(LEVEL_FILES[level]);
+    if (!res.ok) throw new Error(`Failed to load ${level} word list`);
+    const set = new Set((await res.text()).split('\n').filter(Boolean));
+    wordSets[level] = set;
+    return set;
+  }
 
   function maxCellLetters() {
     return el.twoLetterToggle.checked ? 2 : 1;
@@ -191,6 +211,7 @@
       el.solveBtn.disabled = false;
       el.richBtn.disabled = false;
       setTimeout(() => setDictStatus(''), 2500);
+      loadWordSet(el.wordLevel.value).catch((e) => console.error(e)); // preload default level
     } catch (err) {
       setDictStatus('Failed to load dictionary — check your connection and reload.');
       console.error(err);
@@ -257,7 +278,8 @@
     const minLength = Number(el.minLengthInput.value);
     const results = solveBoggle(lowerBoard, state.trie, minLength);
     state.results = results;
-    renderResults();
+    // Make sure the chosen level's word set is ready, then render.
+    loadWordSet(el.wordLevel.value).catch((e) => console.error(e)).finally(renderResults);
   }
 
   function renderResults() {
@@ -274,9 +296,22 @@
       if (b[0].length !== a[0].length) return b[0].length - a[0].length;
       return a[0].localeCompare(b[0]);
     });
+    const totalFound = words.length;
+
+    // Commonness level: keep only words at or above the chosen familiarity.
+    const level = el.wordLevel.value;
+    const levelSet = level === 'all' ? null : wordSets[level];
+    if (levelSet) words = words.filter(([word]) => levelSet.has(word));
 
     const totalScore = words.reduce((s, [, v]) => s + v.score, 0);
-    el.resultsSummary.textContent = `${words.length} word${words.length === 1 ? '' : 's'} · ${totalScore} pts`;
+    const hidden = totalFound - words.length;
+    el.resultsSummary.textContent = `${words.length} word${words.length === 1 ? '' : 's'} · ${totalScore} pts`
+      + (hidden > 0 ? ` · ${hidden} rarer hidden` : '');
+
+    if (words.length === 0) {
+      el.resultsList.innerHTML = '<div class="empty-state">No words at this level — try a broader word level.</div>';
+      return;
+    }
 
     const query = el.wordSearch.value.replace(/[^a-zA-Z]/g, '').toLowerCase();
     if (query) {
@@ -421,6 +456,11 @@
   el.solveBtn.addEventListener('click', solve);
   el.minLengthInput.addEventListener('change', clearResults);
   el.imageInput.addEventListener('change', handleImageUpload);
+  // Changing the word level re-filters instantly — no need to re-solve.
+  el.wordLevel.addEventListener('change', () => {
+    const render = () => { if (state.results) renderResults(); };
+    loadWordSet(el.wordLevel.value).catch((e) => console.error(e)).finally(render);
+  });
   el.twoLetterToggle.addEventListener('change', () => {
     if (!el.twoLetterToggle.checked) {
       state.board = state.board.map((row) => row.map((cell) => cell.slice(0, 1)));

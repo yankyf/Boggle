@@ -111,8 +111,17 @@
           <h2>Words found</h2>
           <div id="results-summary" class="results-summary"></div>
         </div>
-        <div class="results-search">
+        <div class="results-controls">
           <input type="search" id="word-search" placeholder="🔎 Search a word…" autocomplete="off" spellcheck="false" disabled />
+          <label class="level-field">
+            <span>Word level</span>
+            <select id="word-level" title="How common words must be to show. Everyday = only very familiar words; All = every valid word including rare ones.">
+              <option value="everyday">Everyday</option>
+              <option value="common" selected>Common</option>
+              <option value="broad">Broad</option>
+              <option value="all">All words</option>
+            </select>
+          </label>
         </div>
         <div id="results-list" class="results-list"></div>
       </section>

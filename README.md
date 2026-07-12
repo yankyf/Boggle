@@ -36,6 +36,11 @@ Then open http://localhost:8000.
 - **Find words**: runs a trie-guided depth-first search over all 8-directional
   neighbors (standard Boggle adjacency, no reusing a cube in the same word).
   Click any result to see its path highlighted with numbered steps.
+- **Word level**: choose how common the shown words must be — Everyday
+  (~11k most familiar words), Common (~40k), Broad (~64k), or All words
+  (the full ~277k dictionary, including rare Scrabble-only words). Changing
+  the level re-filters instantly without re-solving; the summary shows how
+  many rarer words are hidden.
 - A cell can hold two letters (e.g. `Qu`) to match the real Boggle die.
 
 ## How it works
