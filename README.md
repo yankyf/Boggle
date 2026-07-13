@@ -23,6 +23,12 @@ Then open http://localhost:8000.
 
 ## Using it
 
+- **Language**: English or Hebrew (עברית). Switching loads that language's
+  dictionary and clears the board. Hebrew boards hold regular letter forms —
+  typing a final (ך ם ן ף ץ) converts it, matching treats finals and regular
+  forms as the same letter, and found words display their printed form
+  (e.g. שלום). Hebrew min word length defaults to 2. Photo upload reads
+  Hebrew boards with the Hebrew OCR model.
 - **Rows / Columns**: set the board size (3–10 per side); the grid resizes
   instantly as you change the numbers.
 - **Random board**: fills the grid using real physical Boggle dice sets

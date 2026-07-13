@@ -9,6 +9,8 @@
     trie: null,
     results: null, // Map word -> { path, score }
     activeWord: null,
+    lang: LANGUAGES.en,
+    displayMap: null, // match-form -> display form (e.g. Hebrew finals)
   };
 
   const el = {
@@ -28,6 +30,7 @@
     wordSearch: document.getElementById('word-search'),
     twoLetterToggle: document.getElementById('two-letter-toggle'),
     wordLevel: document.getElementById('word-level'),
+    langSelect: document.getElementById('lang-select'),
   };
 
   // Commonness tiers (cumulative supersets). Loaded lazily the first time a
@@ -123,7 +126,7 @@
     const r = Number(input.dataset.r);
     const c = Number(input.dataset.c);
     const limit = maxCellLetters();
-    const cleaned = input.value.replace(/[^a-zA-Z]/g, '').toUpperCase().slice(0, limit);
+    const cleaned = state.lang.display(input.value.replace(state.lang.stripRegex, '')).slice(0, limit);
     input.value = cleaned;
     state.board[r][c] = cleaned;
     input.classList.remove('needs-review');
@@ -173,6 +176,10 @@
     const newCols = clampSize(el.colsInput.value);
     el.rowsInput.value = newRows;
     el.colsInput.value = newCols;
+    // No-op when nothing changed: duplicate change events (e.g. the native
+    // blur-change when clicking from the size box into a cell) must not
+    // rebuild the grid out from under the input being typed into.
+    if (newRows === state.rows && newCols === state.cols) return;
 
     const newBoard = emptyBoard(newRows, newCols);
     for (let r = 0; r < Math.min(newRows, state.rows); r++) {
@@ -189,7 +196,7 @@
 
   function fillBoard(letters) {
     const limit = maxCellLetters();
-    state.board = letters.map((row) => row.map((cell) => (cell || '').toUpperCase().slice(0, limit)));
+    state.board = letters.map((row) => row.map((cell) => state.lang.display(cell || '').slice(0, limit)));
     renderGrid();
     clearResults();
   }
@@ -203,15 +210,33 @@
   }
 
   async function loadDictionary() {
+    const lang = state.lang;
     try {
-      state.trie = await Trie.buildFromUrl('data/words.txt', (frac) => {
-        setDictStatus(`Loading dictionary… ${Math.round(frac * 100)}%`);
-      });
+      el.solveBtn.disabled = true;
+      el.richBtn.disabled = true;
+      const res = await fetch(lang.dictUrl);
+      if (!res.ok) throw new Error(`Failed to load dictionary: ${res.status}`);
+      const words = (await res.text()).split('\n');
+      const trie = new Trie();
+      const displayMap = new Map();
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i].trim();
+        if (!w) continue;
+        const key = lang.match(w);
+        trie.insert(key);
+        // Remember the printed form when it differs (e.g. Hebrew finals).
+        if (key !== w && !displayMap.has(key)) displayMap.set(key, w);
+        if (i % 20000 === 0) setDictStatus(`Loading dictionary… ${Math.round((i / words.length) * 100)}%`);
+      }
+      state.trie = trie;
+      state.displayMap = displayMap.size ? displayMap : null;
       setDictStatus('Dictionary ready');
       el.solveBtn.disabled = false;
       el.richBtn.disabled = false;
       setTimeout(() => setDictStatus(''), 2500);
-      loadWordSet(el.wordLevel.value).catch((e) => console.error(e)); // preload default level
+      if (lang.hasLevels) {
+        loadWordSet(el.wordLevel.value).catch((e) => console.error(e)); // preload default level
+      }
     } catch (err) {
       setDictStatus('Failed to load dictionary — check your connection and reload.');
       console.error(err);
@@ -274,12 +299,16 @@
     }
     if (!state.trie) return;
 
-    const lowerBoard = state.board.map((row) => row.map((cell) => cell.toLowerCase()));
+    const matchBoard = state.board.map((row) => row.map((cell) => state.lang.match(cell)));
     const minLength = Number(el.minLengthInput.value);
-    const results = solveBoggle(lowerBoard, state.trie, minLength);
+    const results = solveBoggle(matchBoard, state.trie, minLength);
     state.results = results;
-    // Make sure the chosen level's word set is ready, then render.
-    loadWordSet(el.wordLevel.value).catch((e) => console.error(e)).finally(renderResults);
+    if (state.lang.hasLevels) {
+      // Make sure the chosen level's word set is ready, then render.
+      loadWordSet(el.wordLevel.value).catch((e) => console.error(e)).finally(renderResults);
+    } else {
+      renderResults();
+    }
   }
 
   function renderResults() {
@@ -299,7 +328,8 @@
     const totalFound = words.length;
 
     // Commonness level: keep only words at or above the chosen familiarity.
-    const level = el.wordLevel.value;
+    // (English only — other languages have no frequency tiers yet.)
+    const level = state.lang.hasLevels ? el.wordLevel.value : 'all';
     const levelSet = level === 'all' ? null : wordSets[level];
     if (levelSet) words = words.filter(([word]) => levelSet.has(word));
 
@@ -313,7 +343,7 @@
       return;
     }
 
-    const query = el.wordSearch.value.replace(/[^a-zA-Z]/g, '').toLowerCase();
+    const query = state.lang.match(el.wordSearch.value.replace(state.lang.stripRegex, ''));
     if (query) {
       words = words.filter(([word]) => word.includes(query));
       if (words.length === 0) {
@@ -344,7 +374,8 @@
         const chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'word-chip';
-        chip.textContent = word;
+        // Show the printed form (e.g. Hebrew finals) when it differs.
+        chip.textContent = state.displayMap?.get(word) ?? word;
         chip.addEventListener('click', () => highlightPath(info.path, chip));
         row.appendChild(chip);
       }
@@ -370,10 +401,10 @@
       }
       const { board, review } = await recognizeBoardFromCanvas(prep.canvas, state.rows, state.cols, (status, progress) => {
         setOcrStatus(`${status} ${Math.round(progress * 100)}%`);
-      }, prep.size ? prep.size.cuts : null, prep.cells);
+      }, prep.size ? prep.size.cuts : null, prep.cells, state.lang);
       // Keep detected multi-letter dice (Qu, An, …) as-is — capped at 2 —
       // even in single-letter mode, so a real board's special dice survive.
-      state.board = board.map((row) => row.map((cell) => (cell || '').slice(0, 2)));
+      state.board = board.map((row) => row.map((cell) => state.lang.display(cell || '').slice(0, 2)));
       renderGrid();
       clearResults();
       for (let r = 0; r < state.rows; r++) {
@@ -389,9 +420,17 @@
   }
 
   function randomBoardForMode() {
-    return maxCellLetters() === 2
-      ? generateRandomDigraphBoard(state.rows, state.cols)
-      : generateRandomBoard(state.rows, state.cols);
+    const lang = state.lang;
+    if (lang.digraphs && maxCellLetters() === 2) {
+      return generateRandomDigraphBoard(state.rows, state.cols);
+    }
+    if (lang.id !== 'en') {
+      const pair = maxCellLetters() === 2;
+      return Array.from({ length: state.rows }, () =>
+        Array.from({ length: state.cols }, () =>
+          pair ? randomLetterFor(lang) + randomLetterFor(lang) : randomLetterFor(lang)));
+    }
+    return generateRandomBoard(state.rows, state.cols);
   }
 
   // Hunt for a board with the longest possible words: start from the best
@@ -406,9 +445,12 @@
     await new Promise((r) => setTimeout(r, 0)); // let the status paint
 
     const two = maxCellLetters() === 2;
-    const randCell = () => (two
-      ? randomDigraph()
-      : (Math.random() < 0.02 ? 'QU' : weightedRandomLetter().toUpperCase()));
+    const lang = state.lang;
+    const randCell = () => {
+      if (two) return lang.digraphs ? randomDigraph() : randomLetterFor(lang) + randomLetterFor(lang);
+      if (lang.id === 'en' && Math.random() < 0.02) return 'QU';
+      return randomLetterFor(lang);
+    };
 
     const evaluate = (board) => {
       const lower = board.map((row) => row.map((cell) => cell.toLowerCase()));
@@ -460,6 +502,22 @@
   el.wordLevel.addEventListener('change', () => {
     const render = () => { if (state.results) renderResults(); };
     loadWordSet(el.wordLevel.value).catch((e) => console.error(e)).finally(render);
+  });
+  // Switching language loads that language's dictionary and clears the
+  // board (the letters on it belong to the previous alphabet).
+  el.langSelect.addEventListener('change', () => {
+    state.lang = LANGUAGES[el.langSelect.value] || LANGUAGES.en;
+    const lang = state.lang;
+    el.minLengthInput.value = String(lang.minLength);
+    el.wordLevel.disabled = !lang.hasLevels;
+    el.wordLevel.title = lang.hasLevels
+      ? el.wordLevel.title
+      : 'Word levels are available for English only (for now)';
+    el.resultsList.setAttribute('dir', lang.dir);
+    state.board = emptyBoard(state.rows, state.cols);
+    renderGrid();
+    clearResults();
+    loadDictionary();
   });
   el.twoLetterToggle.addEventListener('change', () => {
     if (!el.twoLetterToggle.checked) {

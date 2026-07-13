@@ -22,6 +22,20 @@ const OCR_CELL_SIZE = 220;
 const GOOD_ENOUGH = 80; // stop trying more variants above this confidence
 const NEEDS_REVIEW = 55; // below this, flag the cell for the user to check
 
+// Active OCR language. Set per run by recognizeBoardFromCanvas; the default
+// keeps the module usable standalone (English).
+const OCR_DEFAULT_LANG = {
+  id: 'en',
+  alphabet: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  hasCase: true,
+  stripRegex: /[^a-zA-Z]/g,
+  display: (s) => s.toUpperCase(),
+  tessLang: 'eng',
+  tessWhitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  latinHeuristics: true,
+};
+let ocrLang = OCR_DEFAULT_LANG;
+
 function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -373,7 +387,7 @@ function analyzeGlyph(canvas) {
 
 const TPL_GRID = 32; // glyphs are normalized to a TPL_GRID×TPL_GRID bitmap
 const TPL_FIT = 24; // bounding box is scaled to fit this many cells, centered
-let LETTER_TEMPLATES = null;
+const TEMPLATE_CACHE = {}; // alphabet string -> templates
 
 // Normalize any black-on-white raster into a scale/position-independent
 // binary bitmap: find the ink bounding box, scale it to fit TPL_FIT and
@@ -416,8 +430,9 @@ function normalizeGlyphGrid(imageData) {
   return grid;
 }
 
-function buildLetterTemplates() {
-  if (LETTER_TEMPLATES) return LETTER_TEMPLATES;
+function buildLetterTemplates(alphabet, hasCase) {
+  const cacheKey = alphabet;
+  if (TEMPLATE_CACHE[cacheKey]) return TEMPLATE_CACHE[cacheKey];
   // A few common board fonts so a die's typeface doesn't matter much.
   const fonts = ['bold 150px Arial', 'bold 150px "Times New Roman"', 'bold 150px Georgia', '900 150px Arial'];
   const canvas = document.createElement('canvas');
@@ -433,16 +448,18 @@ function buildLetterTemplates() {
     ctx.fillText(glyph.ch, 100, 104);
     return normalizeGlyphGrid(ctx.getImageData(0, 0, 200, 200));
   };
-  LETTER_TEMPLATES = [];
-  for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
-    // Uppercase grids for normal single-letter reading; lowercase grids kept
-    // separately for the trailing letter of a multi-letter die (An, Qu, Th…),
-    // which is printed lowercase — always mapped back to the capital.
+  const templates = [];
+  for (const ch of alphabet) {
+    // Base grids for normal single-letter reading; lowercase grids (for
+    // languages with case) kept separately for the trailing letter of a
+    // multi-letter die (An, Qu, Th…), which is printed lowercase — always
+    // mapped back to the capital.
     const grids = fonts.map((font) => render({ ch, font }));
-    const lowerGrids = fonts.map((font) => render({ ch: ch.toLowerCase(), font }));
-    LETTER_TEMPLATES.push({ ch, grids, lowerGrids });
+    const lowerGrids = hasCase ? fonts.map((font) => render({ ch: ch.toLowerCase(), font })) : [];
+    templates.push({ ch, grids, lowerGrids });
   }
-  return LETTER_TEMPLATES;
+  TEMPLATE_CACHE[cacheKey] = templates;
+  return templates;
 }
 
 function iouScore(a, b) {
@@ -461,7 +478,7 @@ function iouScore(a, b) {
 // Returns the best-matching letter, a 0–100 confidence from the shape
 // overlap, and the margin over the runner-up (a small margin means two
 // letters matched about equally well — genuinely ambiguous).
-function templateMatch(cleanCanvas, allowLowercase = false) {
+function templateMatch(cleanCanvas, allowLowercase = false, lang = null) {
   const size = cleanCanvas.width;
   const data = cleanCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, size, size);
   const grid = normalizeGlyphGrid(data);
@@ -469,7 +486,8 @@ function templateMatch(cleanCanvas, allowLowercase = false) {
   for (let i = 0; i < grid.length; i++) ink += grid[i];
   if (ink < 8) return { text: '', confidence: -1, margin: 0 };
 
-  const templates = buildLetterTemplates();
+  const cfg = lang || ocrLang;
+  const templates = buildLetterTemplates(cfg.alphabet, cfg.hasCase);
   let best = '';
   let bestScore = 0;
   let second = 0;
@@ -529,7 +547,7 @@ async function readGlyph(worker, glyphCanvas) {
     if (best.confidence >= GOOD_ENOUGH) break;
   }
   const shape = analyzeGlyph(glyphCanvas);
-  if (shape) {
+  if (shape && ocrLang.latinHeuristics) {
     if (!best.text && shape.barLike) best = { text: 'I', confidence: 75 };
     else if (best.text === 'C' && shape.hasHole) best = { text: 'O', confidence: Math.max(best.confidence, 75) };
     else if (!best.text && shape.hasHole) best = { text: 'O', confidence: NEEDS_REVIEW - 5 };
@@ -541,12 +559,12 @@ async function readGlyph(worker, glyphCanvas) {
 async function recognizeAttempt(worker, canvas, psm) {
   await worker.setParameters({ tessedit_pageseg_mode: psm });
   const { data } = await worker.recognize(canvas);
-  let text = (data.text || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2);
+  let text = ocrLang.display((data.text || '').replace(ocrLang.stripRegex, '')).slice(0, 2);
   let confidence = text ? (data.confidence ?? 0) : -1;
-  // "Qu" is the only legitimate two-letter die; any other multi-letter read
-  // means the glyph confused the engine, so keep the first letter but leave
-  // the cell flagged for the user to check.
-  if (text.length === 2 && text !== 'QU') {
+  // In English, "Qu" is the only legitimate two-letter die; any other
+  // multi-letter read means the glyph confused the engine, so keep the
+  // first letter but leave the cell flagged for the user to check.
+  if (text.length === 2 && !(ocrLang.latinHeuristics && text === 'QU')) {
     text = text[0];
     confidence = Math.min(confidence, NEEDS_REVIEW - 5);
   }
@@ -922,10 +940,11 @@ function bestDivisions(profile, length) {
  * @returns {Promise<{board: string[][], review: boolean[][]}>}
  *   board: uppercase cell strings; review: cells the user should double-check
  */
-async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = null, cells = null) {
+async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = null, cells = null, lang = null) {
   if (typeof Tesseract === 'undefined') {
     throw new Error('OCR engine failed to load.');
   }
+  ocrLang = lang || OCR_DEFAULT_LANG;
 
   const cellW = canvas.width / cols;
   const cellH = canvas.height / rows;
@@ -940,7 +959,7 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
   // The whole engine is served with the app (vendor/), so OCR works without
   // any third-party CDN. Paths are absolutized so it also works when the app
   // is hosted under a sub-path (e.g. GitHub Pages).
-  const worker = await Tesseract.createWorker('eng', 1, {
+  const worker = await Tesseract.createWorker(ocrLang.tessLang, 1, {
     workerPath: new URL('vendor/tesseract/worker.min.js', document.baseURI).href,
     corePath: new URL('vendor/tesseract/core', document.baseURI).href,
     langPath: new URL('vendor/tesseract/lang', document.baseURI).href,
@@ -954,7 +973,7 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
     },
   });
   await worker.setParameters({
-    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    tessedit_char_whitelist: ocrLang.tessWhitelist,
   });
 
   const board = [];
@@ -1006,10 +1025,11 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
           }
         }
 
-        // Geometric rescue for Tesseract's isolated-glyph blind spots.
+        // Geometric rescue for Tesseract's isolated-glyph blind spots
+        // (English letter shapes only).
         const uprightCv = tight.hint ? rotateCanvas(tight.canvas, tight.hint) : tight.canvas;
         const shape = analyzeGlyph(uprightCv);
-        if (shape) {
+        if (shape && ocrLang.latinHeuristics) {
           if (!best.text && shape.barLike) {
             best = { text: 'I', confidence: 75 };
           } else if (best.text === 'C' && shape.hasHole) {
@@ -1039,7 +1059,9 @@ async function recognizeBoardFromCanvas(canvas, rows, cols, onProgress, cuts = n
           // flagged when adopted this way: without an underline the
           // orientation is genuinely ambiguous.
           if (tight.hint === null) {
-            const ROTATION_TWINS = new Set(['M', 'W', 'A', 'V', 'Z', 'N']);
+            const ROTATION_TWINS = ocrLang.latinHeuristics
+              ? new Set(['M', 'W', 'A', 'V', 'Z', 'N'])
+              : new Set();
             let bestDeg = 0;
             let bestTpl = tpl;
             for (const deg of [90, 180, 270]) {
