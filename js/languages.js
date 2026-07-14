@@ -19,6 +19,27 @@ const HE_LETTER_FREQUENCY = {
   'ס': 1.9, 'ע': 3.1, 'פ': 2.5, 'צ': 1.6, 'ק': 2.3, 'ר': 5.5, 'ש': 5.6, 'ת': 6.0,
 };
 
+// Yiddish is written in Hebrew script with extra conventions: ligature
+// digraphs (װ=וו, ױ=וי, ײ=יי) and diacritics that distinguish letters
+// (אַ/אָ, פּ/פֿ, בֿ, שׂ, תּ…). Board cells hold plain base letters, so matching
+// decomposes ligatures, strips the marks, and folds finals — a word like
+// ייִדיש matches the path י-י-ד-י-ש.
+const YI_LIGATURES = { 'װ': 'וו', 'ױ': 'וי', 'ײ': 'יי' };
+
+function yiNormalize(s) {
+  return heNormalize(
+    s.replace(/[װױײ]/g, (ch) => YI_LIGATURES[ch]).replace(/[\u05B0-\u05C7]/g, ''),
+  );
+}
+
+// Letter frequencies (%) computed over the Yiddish dictionary's normalized
+// words, for random boards.
+const YI_LETTER_FREQUENCY = {
+  'ע': 12.4, 'י': 12.4, 'נ': 9.0, 'א': 8.6, 'ר': 8.5, 'ו': 6.7, 'ט': 6.1,
+  'ק': 5.5, 'ד': 4.2, 'פ': 3.9, 'ס': 3.8, 'ל': 3.6, 'ג': 3.4, 'ש': 2.6,
+  'מ': 2.1, 'ב': 2.0, 'צ': 1.6, 'כ': 1.3, 'ז': 1.0, 'ה': 0.7, 'ת': 0.2, 'ח': 0.2,
+};
+
 const EN_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const HE_LETTERS = 'אבגדהוזחטיכלמנסעפצקרשת';
 
@@ -57,8 +78,29 @@ const LANGUAGES = {
     hasLevels: false,
     hasCase: false,
     digraphs: false,
+    letterFrequency: HE_LETTER_FREQUENCY,
     tessLang: 'heb',
     tessWhitelist: HE_LETTERS + 'ךםןףץ',
+    latinHeuristics: false,
+  },
+  yi: {
+    id: 'yi',
+    name: 'ייִדיש',
+    dir: 'rtl',
+    dictUrl: 'data/words-yi.txt',
+    alphabet: HE_LETTERS,
+    // Base letters, finals, ligature digraphs and pointing marks are all
+    // legal input — display() folds them down to base letters.
+    stripRegex: /[^א-תךםןףץװױײ\u05B0-\u05C7]/g,
+    display: (s) => yiNormalize(s),
+    match: (s) => yiNormalize(s),
+    minLength: 2,
+    hasLevels: false,
+    hasCase: false,
+    digraphs: false,
+    letterFrequency: YI_LETTER_FREQUENCY,
+    tessLang: 'yid',
+    tessWhitelist: HE_LETTERS + 'ךםןףץװױײ',
     latinHeuristics: false,
   },
 };
@@ -75,6 +117,6 @@ function weightedRandomFrom(freqTable) {
 }
 
 function randomLetterFor(lang) {
-  if (lang.id === 'he') return weightedRandomFrom(HE_LETTER_FREQUENCY);
+  if (lang.letterFrequency) return weightedRandomFrom(lang.letterFrequency);
   return weightedRandomLetter().toUpperCase(); // english (dice.js)
 }
